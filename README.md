@@ -2,9 +2,10 @@
 
 A planned application for organizing meetings and turning their recordings into
 searchable transcripts, summaries, decisions, and follow-up work. This
-repository is in **Phase 1**: it includes Supabase Auth signup, login, logout,
-and a protected dashboard in the Next.js frontend, alongside a minimal FastAPI
-health endpoint.
+repository is in **Phase 2**: it includes the Phase 1 Supabase Auth application
+shell and an additive PostgreSQL schema migration with ownership-based row
+level security. The migration and database verification scripts still need to
+be applied and run against a Supabase/PostgreSQL development database.
 
 ## Planned features
 
@@ -21,7 +22,8 @@ All features in this section are planned and are not implemented yet:
 
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS, shadcn/ui (planned)
 - **Backend:** Python, FastAPI
-- **Database:** PostgreSQL, pgvector (planned)
+- **Database:** PostgreSQL (initial schema migration added in Phase 2);
+  pgvector (planned)
 - **Authentication and file storage:** Supabase Auth (implemented in Phase 1);
   Supabase Storage (planned)
 - **AI:** Gemini primary, Groq secondary, Ollama local alternative (planned)
@@ -38,7 +40,8 @@ exports. AI providers will be accessed through interchangeable backend
 interfaces so application logic is not tied to Gemini.
 
 See [docs/architecture.md](docs/architecture.md) for the architecture and
-authentication flow. Database, storage, AI, media processing, and meeting
+authentication flow, and [database/README.md](database/README.md) for
+migrations and verification. Storage, AI, media processing, and meeting
 features are planned for later phases.
 
 ## Repository structure
@@ -48,7 +51,9 @@ meeting-intelligence-system/
 ├── frontend/                  # Next.js + TypeScript + Tailwind foundation
 ├── backend/                   # FastAPI app and Python dependencies
 │   └── app/
-├── database/                  # Planned PostgreSQL/pgvector schema and migrations
+├── database/                  # PostgreSQL migration and verification scripts
+│   ├── migrations/
+│   └── tests/
 ├── docs/                      # Architecture documentation
 ├── .github/
 │   └── copilot-instructions.md
@@ -117,13 +122,25 @@ python -m uvicorn app.main:app --reload
 The health check is available at `http://127.0.0.1:8000/health` and returns
 `{"status":"ok"}`. See [backend/README.md](backend/README.md) for details.
 
+### Database setup
+
+Phase 2 adds a PostgreSQL migration and SQL verification scripts. They are not
+automatically applied by starting the frontend or backend. To apply and verify
+them against a development database, follow [database/README.md](database/README.md).
+The project does not currently include pgvector, meeting-content tables, or
+database-backed application behavior.
+
 ## Current project status
 
 **Phase 1 — authentication and application shell:** Implemented. Supabase Auth
 provides signup and password login; authenticated users can access the
-protected dashboard, see their email, and log out. Phase 0's Next.js frontend
-and minimal FastAPI health endpoint remain in place. No meeting, database, AI,
-or media features are implemented.
+protected dashboard, see their email, and log out.
+
+**Phase 2 — database foundation:** Migration, owner-scoped RLS policies,
+profile trigger/backfill, schema verification SQL, and manual TypeScript
+database types have been added. Applying the migration and running database
+verification against a real development database remain outstanding. No
+meeting workflows, AI, or media processing are implemented.
 
 ### Authentication routes
 
@@ -137,8 +154,9 @@ establishes the session and returns them to the dashboard.
 
 ## Future development phases
 
-1. Establish database schema and migrations, then authentication and storage.
-2. Add project/meeting workflows and secure media handling.
+1. Apply and validate the database foundation; implement storage policies and
+   secure media handling.
+2. Add project/meeting workflows.
 3. Add transcription, diarization, summaries, and structured meeting insights.
 4. Add provider-backed RAG, meeting search, and tracking workflows.
 5. Add analytics, exports, deployment, and production hardening.

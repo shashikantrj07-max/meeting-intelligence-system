@@ -1,6 +1,6 @@
 # Planned Architecture
 
-This document describes the current Phase 1 foundation and planned system
+This document describes the current Phase 2 foundation and planned system
 architecture. Meeting intelligence features and integrations noted as planned
 are not yet implemented.
 
@@ -12,8 +12,9 @@ are not yet implemented.
 - **Backend (`backend/`)**: Python and FastAPI for API endpoints, validation,
   business logic, privileged database operations, file processing, AI
   orchestration, transcription, RAG, and export generation.
-- **Database (`database/`)**: PostgreSQL with pgvector for relational data and
-  vector search. Schema and migrations are planned for a later phase.
+- **Database (`database/`)**: PostgreSQL stores relational application data.
+  Phase 2 adds the initial schema migration and RLS ownership policies.
+  pgvector and vector-search structures are planned for a later phase.
 - **Authentication**: Supabase Auth is integrated in the frontend using
   `@supabase/ssr`. Frontend authentication uses only the public project URL and
   anon key. The service-role key is not used in this phase and must never be
@@ -44,6 +45,27 @@ Required browser configuration is `NEXT_PUBLIC_SUPABASE_URL` and
 `NEXT_PUBLIC_SUPABASE_ANON_KEY`, stored locally in `frontend/.env.local`.
 Private keys such as `SUPABASE_SERVICE_ROLE_KEY` must never use a
 `NEXT_PUBLIC_` variable or be included in frontend code.
+
+## Phase 2 database foundation
+
+The additive migration in `database/migrations/` creates `profiles`,
+`meetings`, `meeting_participants`, `meeting_files`, and `meeting_processing`.
+Profiles are linked to Supabase Auth users. A database trigger creates a
+profile on signup, and a non-overwriting backfill covers users that already
+exist when the migration is applied.
+
+RLS is enabled for all five tables. A user's profile and meetings are restricted
+to that Auth user; access to participants, file metadata, and processing state
+is inherited through the owning meeting. Database foreign keys cascade meeting
+deletion to its child rows. SQL verification scripts are in
+`database/tests/`, and the corresponding application types are maintained in
+`frontend/src/types/database.ts`.
+
+The migration is an initial schema only: no meeting workflow, uploaded-file
+storage policy, processing API, vector extension, or pgvector table is
+implemented. Apply it and run its checks against a development Supabase
+database as documented in `database/README.md`; a checked-in migration is not
+evidence that it has been applied or validated against a live database.
 
 ## AI and processing boundaries
 
