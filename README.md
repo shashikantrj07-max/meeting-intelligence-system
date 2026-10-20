@@ -2,8 +2,9 @@
 
 A planned application for organizing meetings and turning their recordings into
 searchable transcripts, summaries, decisions, and follow-up work. This
-repository is in the **initial project setup (Phase 0)**: it contains a Next.js
-frontend foundation and a minimal FastAPI health endpoint only.
+repository is in **Phase 1**: it includes Supabase Auth signup, login, logout,
+and a protected dashboard in the Next.js frontend, alongside a minimal FastAPI
+health endpoint.
 
 ## Planned features
 
@@ -21,7 +22,8 @@ All features in this section are planned and are not implemented yet:
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS, shadcn/ui (planned)
 - **Backend:** Python, FastAPI
 - **Database:** PostgreSQL, pgvector (planned)
-- **Authentication and file storage:** Supabase Auth and Supabase Storage (planned)
+- **Authentication and file storage:** Supabase Auth (implemented in Phase 1);
+  Supabase Storage (planned)
 - **AI:** Gemini primary, Groq secondary, Ollama local alternative (planned)
 - **Speech and retrieval:** Whisper, pyannote.audio, LangChain (planned)
 - **Charts and deployment:** Recharts, Vercel, Render/Railway, Supabase (planned)
@@ -35,9 +37,9 @@ database access, file processing, AI orchestration, transcription, RAG, and
 exports. AI providers will be accessed through interchangeable backend
 interfaces so application logic is not tied to Gemini.
 
-See [docs/architecture.md](docs/architecture.md) for the planned architecture.
-No database, authentication, AI, media processing, or business features are
-implemented in Phase 0.
+See [docs/architecture.md](docs/architecture.md) for the architecture and
+authentication flow. Database, storage, AI, media processing, and meeting
+features are planned for later phases.
 
 ## Repository structure
 
@@ -62,11 +64,26 @@ version). The frontend and backend can be installed and started independently.
 
 ### Environment variables
 
-Use `.env.example` as a reference for local configuration. When needed, put
-`NEXT_PUBLIC_` values in `frontend/.env.local` and server-only values such as
-`SUPABASE_SERVICE_ROLE_KEY`, database credentials, and AI provider keys in the
-backend environment. Leave values blank until their integrations are
-implemented. Never commit `.env` files or credentials.
+Create `frontend/.env.local` with only the Supabase project URL and anon key
+from the Supabase project settings. These two `NEXT_PUBLIC_` values are public
+client configuration; Supabase Auth applies its own access controls. Never put
+a service-role key, database credential, or other private secret in frontend
+code or a `NEXT_PUBLIC_` variable. `.env.local` and other `.env` files are
+ignored by Git and must never be committed. The service-role key is not needed
+by this phase.
+
+```powershell
+@'
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+'@ | Set-Content -Encoding ascii frontend\.env.local
+```
+
+Fill in the two values in `frontend/.env.local`. In Supabase Auth settings,
+configure the local site URL as `http://localhost:3000` and allow
+`http://localhost:3000/auth/callback` as a redirect URL. `.env.example`
+documents the broader project configuration but should not be copied wholesale
+into the frontend environment.
 
 ### Frontend setup
 
@@ -102,10 +119,21 @@ The health check is available at `http://127.0.0.1:8000/health` and returns
 
 ## Current project status
 
-**Phase 0 — foundation:** Complete. The Next.js + TypeScript + Tailwind
-frontend, minimal FastAPI health endpoint, initial backend dependencies, and
-project documentation are in place. Authentication, database schema, AI
-integrations, uploads, and all user-facing product features remain planned.
+**Phase 1 — authentication and application shell:** Implemented. Supabase Auth
+provides signup and password login; authenticated users can access the
+protected dashboard, see their email, and log out. Phase 0's Next.js frontend
+and minimal FastAPI health endpoint remain in place. No meeting, database, AI,
+or media features are implemented.
+
+### Authentication routes
+
+- `/login` — email/password login
+- `/signup` — email/password registration with password confirmation
+- `/dashboard` — protected authenticated application shell
+
+Supabase email confirmation may be enabled for the project. When enabled,
+signup asks the user to confirm their email; the confirmation callback
+establishes the session and returns them to the dashboard.
 
 ## Future development phases
 

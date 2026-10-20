@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Meeting Intelligence System",
-  description: "Meeting Intelligence System project foundation",
+  description: "Your meeting intelligence workspace",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
