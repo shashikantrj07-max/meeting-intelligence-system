@@ -79,7 +79,9 @@ export function AuthForm({ mode }: AuthFormProps) {
         return;
       }
 
-      router.replace("/dashboard");
+      router.replace(
+        getInternalRedirect(window.location.search, window.location.origin),
+      );
       router.refresh();
     } catch {
       setErrorMessage("Something went wrong. Please try again.");
@@ -207,6 +209,30 @@ export function AuthForm({ mode }: AuthFormProps) {
       </section>
     </main>
   );
+}
+
+function getInternalRedirect(search: string, origin: string) {
+  const next = new URLSearchParams(search).get("next");
+
+  if (
+    !next ||
+    !next.startsWith("/") ||
+    next.startsWith("//") ||
+    next.includes("\\")
+  ) {
+    return "/dashboard";
+  }
+
+  try {
+    const destination = new URL(next, origin);
+    if (destination.origin !== origin) {
+      return "/dashboard";
+    }
+
+    return `${destination.pathname}${destination.search}${destination.hash}`;
+  } catch {
+    return "/dashboard";
+  }
 }
 
 function ConfirmationError() {

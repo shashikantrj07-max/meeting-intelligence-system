@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 
 import { AuthenticatedShell } from "@/components/auth/authenticated-shell";
 import { createClient } from "@/lib/supabase/server";
@@ -27,6 +28,8 @@ async function AuthenticatedContent({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  await connection();
+
   const supabase = await createClient();
   const {
     data: { user },
