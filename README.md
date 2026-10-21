@@ -2,10 +2,9 @@
 
 A planned application for organizing meetings and turning their recordings into
 searchable transcripts, summaries, decisions, and follow-up work. This
-repository is in **Phase 2**: it includes the Phase 1 Supabase Auth application
-shell and an additive PostgreSQL schema migration with ownership-based row
-level security. The migration and database verification scripts still need to
-be applied and run against a Supabase/PostgreSQL development database.
+repository is in **Phase 4**: it includes Supabase Auth, a protected meeting
+workspace, and a meeting transcript table whose row-level security inherits
+ownership from its parent meeting.
 
 ## Planned features
 
@@ -22,7 +21,7 @@ All features in this section are planned and are not implemented yet:
 
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS, shadcn/ui (planned)
 - **Backend:** Python, FastAPI
-- **Database:** PostgreSQL (initial schema migration added in Phase 2);
+- **Database:** PostgreSQL (meeting and transcript schema with RLS);
   pgvector (planned)
 - **Authentication and file storage:** Supabase Auth (implemented in Phase 1);
   Supabase Storage (planned)
@@ -41,8 +40,8 @@ interfaces so application logic is not tied to Gemini.
 
 See [docs/architecture.md](docs/architecture.md) for the architecture and
 authentication flow, and [database/README.md](database/README.md) for
-migrations and verification. Storage, AI, media processing, and meeting
-features are planned for later phases.
+migrations and verification. Storage, AI, and media processing are planned
+for later phases.
 
 ## Repository structure
 
@@ -51,7 +50,7 @@ meeting-intelligence-system/
 ├── frontend/                  # Next.js + TypeScript + Tailwind foundation
 ├── backend/                   # FastAPI app and Python dependencies
 │   └── app/
-├── database/                  # PostgreSQL migration and verification scripts
+├── database/                  # PostgreSQL migrations and verification scripts
 │   ├── migrations/
 │   └── tests/
 ├── docs/                      # Architecture documentation
@@ -124,11 +123,11 @@ The health check is available at `http://127.0.0.1:8000/health` and returns
 
 ### Database setup
 
-Phase 2 adds a PostgreSQL migration and SQL verification scripts. They are not
-automatically applied by starting the frontend or backend. To apply and verify
-them against a development database, follow [database/README.md](database/README.md).
-The project does not currently include pgvector, meeting-content tables, or
-database-backed application behavior.
+Phase 2 and Phase 4 add PostgreSQL migrations and SQL verification scripts.
+They are not automatically applied by starting the frontend or backend. To
+apply and verify them against a development database, follow
+[database/README.md](database/README.md). The project does not currently
+include pgvector, media upload, or AI processing.
 
 ## Current project status
 
@@ -136,11 +135,18 @@ database-backed application behavior.
 provides signup and password login; authenticated users can access the
 protected dashboard, see their email, and log out.
 
-**Phase 2 — database foundation:** Migration, owner-scoped RLS policies,
-profile trigger/backfill, schema verification SQL, and manual TypeScript
-database types have been added. Applying the migration and running database
-verification against a real development database remain outstanding. No
-meeting workflows, AI, or media processing are implemented.
+**Phase 2 — database foundation:** Implemented, including owner-scoped RLS
+policies and profile creation/backfill.
+
+**Phase 3 — meeting management:** Implemented. Authenticated users can create,
+view, edit, and delete their own meetings.
+
+**Phase 4 — transcript management:** Transcript migration, ownership RLS,
+manual TypeScript types, and authenticated create/view/edit/delete UI are
+implemented. Apply the Phase 4 migration to the configured Supabase project
+before using the transcript UI; live transcript CRUD and isolation checks
+remain pending. No AI summarization, transcription, or media processing is
+included.
 
 ### Authentication routes
 
@@ -154,10 +160,9 @@ establishes the session and returns them to the dashboard.
 
 ## Future development phases
 
-1. Apply and validate the database foundation; implement storage policies and
-   secure media handling.
-2. Add project/meeting workflows.
-3. Add transcription, diarization, summaries, and structured meeting insights.
+1. Add secure media upload and storage policies.
+2. Add transcription and diarization workflows.
+3. Add summaries and structured meeting insights.
 4. Add provider-backed RAG, meeting search, and tracking workflows.
 5. Add analytics, exports, deployment, and production hardening.
 

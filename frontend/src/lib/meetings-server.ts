@@ -15,3 +15,15 @@ export async function getMeetingById(id: string) {
     .eq("id", id)
     .maybeSingle();
 }
+
+export async function getTranscriptByMeetingId(meetingId: string) {
+  await connection();
+  const supabase = await createClient();
+
+  return supabase
+    .schema("public")
+    .from("meeting_transcripts")
+    .select("id, meeting_id, content, created_at, updated_at")
+    .eq("meeting_id", meetingId)
+    .maybeSingle();
+}

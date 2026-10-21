@@ -213,6 +213,38 @@ export type Database = {
           },
         ]
       >;
+      meeting_transcripts: Table<
+        {
+          id: string;
+          meeting_id: string;
+          content: string;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          meeting_id: string;
+          content: string;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          meeting_id?: string;
+          content?: string;
+          created_at?: string;
+          updated_at?: string;
+        },
+        [
+          {
+            foreignKeyName: "meeting_transcripts_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: true;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          },
+        ]
+      >;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

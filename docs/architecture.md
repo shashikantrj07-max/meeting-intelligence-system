@@ -61,11 +61,26 @@ deletion to its child rows. SQL verification scripts are in
 `database/tests/`, and the corresponding application types are maintained in
 `frontend/src/types/database.ts`.
 
-The migration is an initial schema only: no meeting workflow, uploaded-file
-storage policy, processing API, vector extension, or pgvector table is
-implemented. Apply it and run its checks against a development Supabase
-database as documented in `database/README.md`; a checked-in migration is not
-evidence that it has been applied or validated against a live database.
+The Phase 2 migration establishes the initial meeting schema; it does not
+implement uploaded-file storage policies, a processing API, a vector extension,
+or pgvector tables. Apply migrations and run their checks against a development
+Supabase database as documented in `database/README.md`; a checked-in migration
+is not evidence that it has been applied or validated against a live database.
+
+## Phase 4 transcript management
+
+`public.meeting_transcripts` stores at most one transcript for each meeting.
+The transcript has its own ID and timestamps and is deleted when its parent
+meeting is deleted. Its RLS policies check ownership through the referenced
+meeting, matching the existing participant, file, and processing policy
+pattern. Authenticated browser operations cannot set an owner; only the
+meeting relationship is supplied, and the database enforces access.
+
+The meeting detail route loads transcript content only after the parent
+meeting is visible under RLS. Transcript creation, editing, and deletion use
+the normal Supabase browser client under the current authenticated session.
+AI summarization, media transcription, and background processing remain out
+of scope.
 
 ## AI and processing boundaries
 

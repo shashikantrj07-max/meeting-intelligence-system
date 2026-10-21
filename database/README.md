@@ -1,10 +1,10 @@
 # Database
 
-The Phase 2 foundation uses PostgreSQL through Supabase. The initial migration
-creates the application profile and meeting metadata tables, ownership
-constraints, indexes, timestamp triggers, and row-level security (RLS)
-policies. It does not create meeting-content, transcription, embedding, or
-pgvector structures; those belong to later phases.
+The database foundation uses PostgreSQL through Supabase. The migrations create
+the application profile, meeting metadata, and one-to-one meeting transcript
+tables with ownership constraints, indexes, timestamp triggers, and row-level
+security (RLS) policies. AI-generated meeting content, embeddings, and
+pgvector structures belong to later phases.
 
 ## Schema
 
@@ -17,12 +17,14 @@ pgvector structures; those belong to later phases.
   itself is not configured by this migration.
 - `meeting_processing`: one processing-state record per meeting; processing
   functionality is not implemented yet.
+- `meeting_transcripts`: one editable transcript per meeting, associated
+  directly with the parent meeting.
 
 Every application table has RLS enabled. Policies restrict profiles and
-meetings to their owner; child rows inherit access through the referenced
-meeting. Authenticated users do not receive `DELETE` permission for profiles
-or processing records. Meeting deletion cascades to its participants, files,
-and processing record.
+meetings to their owner; child rows, including transcripts, inherit access
+through the referenced meeting. Authenticated users do not receive `DELETE`
+permission for profiles or processing records. Meeting deletion cascades to
+its participants, files, processing record, and transcript.
 
 ## Apply the migration
 
@@ -34,6 +36,7 @@ From the repository root, apply the migration with `psql`:
 
 ```powershell
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f database/migrations/20261021000100_phase2_database_foundation.sql
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f database/migrations/20261022000100_phase4_meeting_transcripts.sql
 ```
 
 `-1` wraps the migration in one transaction. The connection needs permission to
@@ -47,6 +50,7 @@ After applying the migration, run the catalog/schema assertions:
 
 ```powershell
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f database/tests/verify_schema.sql
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f database/tests/verify_phase4_transcripts.sql
 ```
 
 The ownership behavior script needs two different, existing Supabase Auth
