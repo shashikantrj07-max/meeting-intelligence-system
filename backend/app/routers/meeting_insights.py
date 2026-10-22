@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
 from app.schemas.meeting_insights import MeetingInsights
 from app.services.ai.gemini import GeminiMeetingInsightsProvider
@@ -58,11 +58,116 @@ def _upsert_processing_state(
     ).execute()
 
 
-@router.post("/{meeting_id}/insights")
+def _mark_processing_failed(
+    supabase: Any,
+    meeting_id: str,
+    started_at: str,
+    error_message: str,
+) -> None:
+    try:
+        _upsert_processing_state(
+            supabase,
+            meeting_id,
+            "failed",
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+            error_message=error_message,
+        )
+    except Exception as exc:
+        logger.error(
+            "Unable to record failed processing state (%s).",
+            type(exc).__name__,
+        )
+
+
+def _generate_and_save_insights(
+    supabase: Any,
+    meeting_id: str,
+    transcript_text: str,
+    started_at: str,
+) -> None:
+    try:
+        insights: MeetingInsights = GeminiMeetingInsightsProvider().generate(
+            transcript_text
+        )
+    except Exception as exc:
+        logger.error("Gemini insights generation failed (%s).", type(exc).__name__)
+        _mark_processing_failed(
+            supabase,
+            meeting_id,
+            started_at,
+            "Meeting intelligence generation failed.",
+        )
+        return
+
+    insight_data = insights.model_dump(mode="json")
+    payload = {
+        "meeting_id": meeting_id,
+        "summary": insight_data["summary"],
+        "key_decisions": insight_data["key_decisions"],
+        "action_items": insight_data["action_items"],
+        "risks_blockers": insight_data["risks_blockers"],
+    }
+
+    try:
+        saved_result = (
+            supabase.schema("public")
+            .table("meeting_insights")
+            .upsert(payload, on_conflict="meeting_id")
+            .select(
+                "id, meeting_id, summary, key_decisions, action_items, "
+                "risks_blockers, created_at, updated_at"
+            )
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Meeting insights save failed (%s).", type(exc).__name__)
+        _mark_processing_failed(
+            supabase,
+            meeting_id,
+            started_at,
+            "Meeting intelligence could not be saved.",
+        )
+        return
+
+    if saved_result.data is None:
+        logger.error("Meeting insights save returned no data.")
+        _mark_processing_failed(
+            supabase,
+            meeting_id,
+            started_at,
+            "Meeting intelligence could not be saved.",
+        )
+        return
+
+    try:
+        _upsert_processing_state(
+            supabase,
+            meeting_id,
+            "completed",
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as exc:
+        logger.error(
+            "Unable to record completed processing state (%s).",
+            type(exc).__name__,
+        )
+        _mark_processing_failed(
+            supabase,
+            meeting_id,
+            started_at,
+            "Meeting processing could not be completed.",
+        )
+
+
+@router.post("/{meeting_id}/insights", status_code=202)
 def generate_meeting_insights(
     meeting_id: UUID,
+    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
+) -> dict[str, str]:
     access_token = _bearer_token(authorization)
 
     try:
@@ -158,106 +263,11 @@ def generate_meeting_insights(
             exc,
         ) from exc
 
-    try:
-        insights: MeetingInsights = GeminiMeetingInsightsProvider().generate(
-            transcript_text
-        )
-    except Exception as exc:
-        logger.error("Gemini insights generation failed (%s).", type(exc).__name__)
-        try:
-            _upsert_processing_state(
-                supabase,
-                meeting_id_value,
-                "failed",
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc).isoformat(),
-                error_message="Meeting intelligence generation failed.",
-            )
-        except Exception as state_exc:
-            logger.error(
-                "Unable to record failed processing state (%s).",
-                type(state_exc).__name__,
-            )
-        raise HTTPException(
-            status_code=502,
-            detail="Meeting intelligence generation failed.",
-        ) from exc
-
-    insight_data = insights.model_dump(mode="json")
-    payload = {
-        "meeting_id": meeting_id_value,
-        "summary": insight_data["summary"],
-        "key_decisions": insight_data["key_decisions"],
-        "action_items": insight_data["action_items"],
-        "risks_blockers": insight_data["risks_blockers"],
-    }
-
-    try:
-        saved_result = (
-            supabase.schema("public")
-            .table("meeting_insights")
-            .upsert(payload, on_conflict="meeting_id")
-            .select(
-                "id, meeting_id, summary, key_decisions, action_items, "
-                "risks_blockers, created_at, updated_at"
-            )
-            .single()
-            .execute()
-        )
-    except Exception as exc:
-        try:
-            _upsert_processing_state(
-                supabase,
-                meeting_id_value,
-                "failed",
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc).isoformat(),
-                error_message="Meeting intelligence could not be saved.",
-            )
-        except Exception as state_exc:
-            logger.error(
-                "Unable to record failed processing state (%s).",
-                type(state_exc).__name__,
-            )
-        raise _server_error(
-            "Unable to save meeting intelligence.",
-            "Meeting insights upsert",
-            exc,
-        ) from exc
-
-    if saved_result.data is None:
-        try:
-            _upsert_processing_state(
-                supabase,
-                meeting_id_value,
-                "failed",
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc).isoformat(),
-                error_message="Meeting intelligence could not be saved.",
-            )
-        except Exception as state_exc:
-            logger.error(
-                "Unable to record failed processing state (%s).",
-                type(state_exc).__name__,
-            )
-        raise HTTPException(
-            status_code=500,
-            detail="Meeting intelligence could not be saved.",
-        )
-
-    try:
-        _upsert_processing_state(
-            supabase,
-            meeting_id_value,
-            "completed",
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc).isoformat(),
-        )
-    except Exception as exc:
-        raise _server_error(
-            "Meeting intelligence was saved, but processing status could not be updated.",
-            "Processing completion update",
-            exc,
-        ) from exc
-
-    return saved_result.data
+    background_tasks.add_task(
+        _generate_and_save_insights,
+        supabase,
+        meeting_id_value,
+        transcript_text,
+        started_at,
+    )
+    return {"meeting_id": meeting_id_value, "stage": "analyzing"}

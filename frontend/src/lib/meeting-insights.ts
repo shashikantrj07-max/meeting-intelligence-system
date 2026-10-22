@@ -1,10 +1,8 @@
 import { createClient } from "@/lib/supabase/client";
 
 type GenerateMeetingInsightsResponse = {
-  summary: string;
-  key_decisions: unknown[];
-  action_items: unknown[];
-  risks_blockers: unknown[];
+  meeting_id: string;
+  stage: "analyzing";
 };
 
 export async function generateMeetingInsights(

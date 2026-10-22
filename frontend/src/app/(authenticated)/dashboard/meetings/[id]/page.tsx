@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { DeleteMeetingButton } from "@/components/meetings/delete-meeting-button";
 import { DeleteTranscriptButton } from "@/components/meetings/delete-transcript-button";
+import { MeetingProcessingStatusRefresh } from "@/components/meetings/meeting-processing-status-refresh";
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
 import { formatMeetingDate } from "@/lib/meetings";
 import {
@@ -190,6 +191,7 @@ async function MeetingDetailContent({
       </section>
 
       <section className="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+        <MeetingProcessingStatusRefresh stage={processing?.stage ?? null} />
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-zinc-950">
