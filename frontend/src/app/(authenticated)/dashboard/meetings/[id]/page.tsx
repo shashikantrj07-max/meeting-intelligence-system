@@ -7,8 +7,12 @@ import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
 import { formatMeetingDate } from "@/lib/meetings";
 import {
   getMeetingById,
+  getMeetingInsightsByMeetingId,
   getTranscriptByMeetingId,
 } from "@/lib/meetings-server";
+import type { Json } from "@/types/database";
+
+import { GenerateInsightsButton } from "@/components/meetings/generate-insights-button";
 
 export default function MeetingDetailPage({
   params,
@@ -55,6 +59,13 @@ async function MeetingDetailContent({
 
   if (transcriptError && process.env.NODE_ENV === "development") {
     console.error("Unable to load meeting transcript:", transcriptError);
+  }
+
+  const { data: insights, error: insightsError } =
+    await getMeetingInsightsByMeetingId(meeting.id);
+
+  if (insightsError && process.env.NODE_ENV === "development") {
+    console.error("Unable to load meeting intelligence:", insightsError);
   }
 
   return (
@@ -170,6 +181,55 @@ async function MeetingDetailContent({
         )}
       </section>
 
+      <section className="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-950">
+              Meeting Intelligence
+            </h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Generate a summary, decisions, action items, and risks from the transcript.
+            </p>
+          </div>
+
+          <GenerateInsightsButton
+            meetingId={meeting.id}
+            disabled={!transcript}
+          />
+        </div>
+
+        {insightsError ? (
+          <p
+            className="mt-5 rounded-md bg-red-50 p-4 text-sm text-red-800"
+            role="alert"
+          >
+            Meeting intelligence could not be loaded. Please try again later.
+          </p>
+        ) : insights ? (
+          <div className="mt-5 space-y-6">
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900">Summary</h3>
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-zinc-700">
+                {insights.summary}
+              </p>
+            </div>
+            <InsightList
+              title="Key Decisions"
+              value={insights.key_decisions}
+            />
+            <InsightList title="Action Items" value={insights.action_items} />
+            <InsightList
+              title="Risks & Blockers"
+              value={insights.risks_blockers}
+            />
+          </div>
+        ) : (
+          <p className="mt-5 rounded-md border border-dashed border-zinc-300 bg-zinc-50 p-5 text-sm text-zinc-600">
+            No meeting intelligence has been generated yet.
+          </p>
+        )}
+      </section>
+
       <div className="mt-6 grid gap-4 md:grid-cols-3">
         <PlaceholderSection
           description="Meeting participant management will be available in a later phase."
@@ -185,6 +245,72 @@ async function MeetingDetailContent({
         />
       </div>
     </main>
+  );
+}
+
+function InsightList({
+  title,
+  value,
+}: {
+  title: string;
+  value: Json;
+}) {
+  const items = Array.isArray(value) ? value : [];
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
+
+      {items.length === 0 ? (
+        <p className="mt-2 text-sm text-zinc-600">None recorded.</p>
+      ) : (
+        <ul className="mt-2 space-y-3">
+          {items.map((item, index) => (
+            <li
+              className="rounded-lg border border-zinc-200 bg-zinc-50 p-4"
+              key={index}
+            >
+              {typeof item === "object" &&
+              item !== null &&
+              "text" in item &&
+              typeof item.text === "string" ? (
+                <>
+                  <p className="whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
+                    {item.text}
+                  </p>
+
+                  {"owner" in item &&
+                    typeof item.owner === "string" &&
+                    item.owner.trim() && (
+                      <p className="mt-2 text-xs text-zinc-600">
+                        <span className="font-medium text-zinc-700">
+                          Owner:
+                        </span>{" "}
+                        {item.owner}
+                      </p>
+                    )}
+
+                  {"due_date" in item &&
+                    typeof item.due_date === "string" &&
+                    item.due_date.trim() && (
+                      <p className="mt-1 text-xs text-zinc-600">
+                        <span className="font-medium text-zinc-700">
+                          Due:
+                        </span>{" "}
+                        {item.due_date}
+                      </p>
+                    )}
+                </>
+              ) : (
+                <p className="text-sm text-zinc-600">
+                  No readable text is available.
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

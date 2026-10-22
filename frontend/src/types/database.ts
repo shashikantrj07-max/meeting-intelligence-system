@@ -245,6 +245,47 @@ export type Database = {
           },
         ]
       >;
+      meeting_insights: Table<
+        {
+          id: string;
+          meeting_id: string;
+          summary: string;
+          key_decisions: Json;
+          action_items: Json;
+          risks_blockers: Json;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          meeting_id: string;
+          summary: string;
+          key_decisions?: Json;
+          action_items?: Json;
+          risks_blockers?: Json;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          meeting_id?: string;
+          summary?: string;
+          key_decisions?: Json;
+          action_items?: Json;
+          risks_blockers?: Json;
+          created_at?: string;
+          updated_at?: string;
+        },
+        [
+          {
+            foreignKeyName: "meeting_insights_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: true;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          },
+        ]
+      >;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

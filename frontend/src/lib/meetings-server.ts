@@ -27,3 +27,17 @@ export async function getTranscriptByMeetingId(meetingId: string) {
     .eq("meeting_id", meetingId)
     .maybeSingle();
 }
+
+export async function getMeetingInsightsByMeetingId(meetingId: string) {
+  await connection();
+  const supabase = await createClient();
+
+  return supabase
+    .schema("public")
+    .from("meeting_insights")
+    .select(
+      "id, meeting_id, summary, key_decisions, action_items, risks_blockers, created_at, updated_at",
+    )
+    .eq("meeting_id", meetingId)
+    .maybeSingle();
+}
