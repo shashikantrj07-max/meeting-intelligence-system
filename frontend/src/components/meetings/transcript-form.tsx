@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useState, type ChangeEvent, type FormEvent } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 import type { Database } from "@/types/database";
 
 type Transcript = Database["public"]["Tables"]["meeting_transcripts"]["Row"];
+const MAX_TRANSCRIPT_FILE_SIZE = 2 * 1024 * 1024;
 
 export function TranscriptForm({
   meetingId,
@@ -84,11 +85,71 @@ export function TranscriptForm({
     }
   }
 
+  async function handleFileImport(event: ChangeEvent<HTMLInputElement>) {
+    setErrorMessage("");
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".txt")) {
+      setErrorMessage("Choose a .txt file to import.");
+      input.value = "";
+      return;
+    }
+
+    if (file.size > MAX_TRANSCRIPT_FILE_SIZE) {
+      setErrorMessage("The .txt file must be 2 MB or smaller.");
+      input.value = "";
+      return;
+    }
+
+    if (file.size === 0) {
+      setErrorMessage("The selected .txt file is empty.");
+      input.value = "";
+      return;
+    }
+
+    try {
+      const importedContent = await file.text();
+      if (!importedContent.trim()) {
+        setErrorMessage("The selected .txt file is empty.");
+        input.value = "";
+        return;
+      }
+
+      setContent(importedContent);
+    } catch {
+      setErrorMessage("Unable to read the selected .txt file.");
+      input.value = "";
+    }
+  }
+
   return (
     <form
       className="mt-8 space-y-5 rounded-xl border border-zinc-200 bg-white p-6"
       onSubmit={handleSubmit}
     >
+      <div>
+        <label
+          className="block text-sm font-medium text-zinc-800"
+          htmlFor="transcript-file"
+        >
+          Import .txt transcript
+        </label>
+        <input
+          accept=".txt,text/plain"
+          className="mt-2 block w-full text-sm text-zinc-700 file:mr-4 file:rounded-md file:border-0 file:bg-zinc-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-zinc-800 hover:file:bg-zinc-200"
+          disabled={isSaving}
+          id="transcript-file"
+          onChange={handleFileImport}
+          type="file"
+        />
+        <p className="mt-1 text-xs text-zinc-500">Maximum file size: 2 MB.</p>
+      </div>
+
       <div>
         <label
           className="block text-sm font-medium text-zinc-800"
