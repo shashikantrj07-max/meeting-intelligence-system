@@ -3,11 +3,14 @@ import Link from "next/link";
 
 import { DeleteMeetingButton } from "@/components/meetings/delete-meeting-button";
 import { DeleteTranscriptButton } from "@/components/meetings/delete-transcript-button";
+import { MeetingFileDeleteButton } from "@/components/meetings/meeting-file-delete-button";
+import { MeetingFileUpload } from "@/components/meetings/meeting-file-upload";
 import { MeetingProcessingControls } from "@/components/meetings/meeting-processing-controls";
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
 import { formatMeetingDate } from "@/lib/meetings";
 import {
   getMeetingById,
+  getMeetingFilesByMeetingId,
   getMeetingInsightsByMeetingId,
   getMeetingProcessingByMeetingId,
   getTranscriptByMeetingId,
@@ -74,6 +77,14 @@ async function MeetingDetailContent({
   if (processingError && process.env.NODE_ENV === "development") {
     console.error("Unable to load meeting processing status:", processingError);
   }
+
+  const { data: meetingFiles, error: meetingFilesError } =
+    await getMeetingFilesByMeetingId(meeting.id);
+
+  if (meetingFilesError && process.env.NODE_ENV === "development") {
+    console.error("Unable to load meeting files:", meetingFilesError);
+  }
+
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-12">
       <Link
@@ -258,10 +269,43 @@ async function MeetingDetailContent({
           description="Meeting participant management will be available in a later phase."
           title="Participants"
         />
-        <PlaceholderSection
-          description="Meeting file upload and storage will be available in a later phase."
-          title="Files"
-        />
+        <section className="rounded-xl border border-zinc-200 bg-white p-5">
+          <h2 className="font-semibold text-zinc-950">Files</h2>
+          <div className="mt-4">
+            <MeetingFileUpload meetingId={meeting.id} />
+          </div>
+          {meetingFilesError ? (
+            <p className="mt-4 text-sm text-red-800" role="alert">
+              Unable to load meeting files.
+            </p>
+          ) : meetingFiles && meetingFiles.length > 0 ? (
+            <ul className="mt-5 divide-y divide-zinc-200">
+              {meetingFiles.map((file) => (
+                <li
+                  className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-0 last:pb-0"
+                  key={file.id}
+                >
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-medium text-zinc-900">
+                      {file.original_filename}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-600">
+                      {file.mime_type} · {formatFileSize(file.file_size_bytes)}
+                    </p>
+                  </div>
+                  <MeetingFileDeleteButton
+                    fileId={file.id}
+                    storagePath={file.storage_path}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-4 text-sm text-zinc-600">
+              No audio or video files have been uploaded for this meeting.
+            </p>
+          )}
+        </section>
         <PlaceholderSection
           description="Transcription and processing tools will be available in a later phase."
           title="Processing"
@@ -269,6 +313,23 @@ async function MeetingDetailContent({
       </div>
     </main>
   );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const units = ["KiB", "MiB", "GiB"];
+  let size = bytes;
+  let unitIndex = -1;
+
+  do {
+    size /= 1024;
+    unitIndex += 1;
+  } while (size >= 1024 && unitIndex < units.length - 1);
+
+  return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function InsightList({

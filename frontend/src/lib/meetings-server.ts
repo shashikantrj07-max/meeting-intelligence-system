@@ -55,3 +55,17 @@ export async function getMeetingProcessingByMeetingId(meetingId: string) {
     .eq("meeting_id", meetingId)
     .maybeSingle();
 }
+
+export async function getMeetingFilesByMeetingId(meetingId: string) {
+  await connection();
+  const supabase = await createClient();
+
+  return supabase
+    .schema("public")
+    .from("meeting_files")
+    .select(
+      "id, meeting_id, storage_path, original_filename, mime_type, file_size_bytes, created_at",
+    )
+    .eq("meeting_id", meetingId)
+    .order("created_at", { ascending: false });
+}

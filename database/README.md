@@ -14,7 +14,8 @@ pgvector structures belong to later phases.
 - `meetings`: user-owned meeting metadata and lifecycle status.
 - `meeting_participants`: participants associated with a meeting.
 - `meeting_files`: metadata and storage path for a meeting file. File storage
-  itself is not configured by this migration.
+  is stored in the private Supabase Storage bucket `meeting-files`. Storage
+  object policies require an owner-authorized `meeting_files` metadata row.
 - `meeting_processing`: one processing-state record per meeting; processing
   functionality is not implemented yet.
 - `meeting_transcripts`: one editable transcript per meeting, associated
@@ -37,6 +38,7 @@ From the repository root, apply the migration with `psql`:
 ```powershell
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f database/migrations/20261021000100_phase2_database_foundation.sql
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f database/migrations/20261022000100_phase4_meeting_transcripts.sql
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f database/migrations/20261022000200_phase6_meeting_file_storage.sql
 ```
 
 `-1` wraps the migration in one transaction. The connection needs permission to
@@ -51,7 +53,15 @@ After applying the migration, run the catalog/schema assertions:
 ```powershell
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f database/tests/verify_schema.sql
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f database/tests/verify_phase4_transcripts.sql
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f database/tests/verify_phase6_meeting_file_storage.sql
 ```
+
+The Phase 6 migration creates the private `meeting-files` bucket with a 500 MiB
+maximum object size and audio/video MIME types only. Storage object SELECT,
+INSERT, UPDATE, and DELETE policies require an exact `storage_path` match to a
+`meeting_files` row whose parent meeting has `owner_id = auth.uid()`. The
+existing `meeting_files` table RLS also applies. Create the authorized metadata
+row before uploading the object; do not accept an owner ID from the client.
 
 The ownership behavior script needs two different, existing Supabase Auth
 users whose profile rows were created by the migration's trigger or backfill.
