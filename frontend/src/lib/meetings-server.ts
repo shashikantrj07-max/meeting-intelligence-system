@@ -41,3 +41,17 @@ export async function getMeetingInsightsByMeetingId(meetingId: string) {
     .eq("meeting_id", meetingId)
     .maybeSingle();
 }
+
+export async function getMeetingProcessingByMeetingId(meetingId: string) {
+  await connection();
+  const supabase = await createClient();
+
+  return supabase
+    .schema("public")
+    .from("meeting_processing")
+    .select(
+      "id, meeting_id, stage, error_message, started_at, completed_at, created_at, updated_at",
+    )
+    .eq("meeting_id", meetingId)
+    .maybeSingle();
+}

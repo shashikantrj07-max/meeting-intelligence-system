@@ -8,9 +8,10 @@ import { formatMeetingDate } from "@/lib/meetings";
 import {
   getMeetingById,
   getMeetingInsightsByMeetingId,
+  getMeetingProcessingByMeetingId,
   getTranscriptByMeetingId,
 } from "@/lib/meetings-server";
-import type { Json } from "@/types/database";
+import type { Json, MeetingProcessingStage } from "@/types/database";
 
 import { GenerateInsightsButton } from "@/components/meetings/generate-insights-button";
 
@@ -66,6 +67,13 @@ async function MeetingDetailContent({
 
   if (insightsError && process.env.NODE_ENV === "development") {
     console.error("Unable to load meeting intelligence:", insightsError);
+  }
+
+  const { data: processing, error: processingError } =
+    await getMeetingProcessingByMeetingId(meeting.id);
+
+  if (processingError && process.env.NODE_ENV === "development") {
+    console.error("Unable to load meeting processing status:", processingError);
   }
 
   return (
@@ -204,6 +212,17 @@ async function MeetingDetailContent({
           />
         </div>
 
+        {processingError ? (
+          <p
+            className="mt-5 rounded-md bg-red-50 p-4 text-sm text-red-800"
+            role="alert"
+          >
+            Processing status could not be loaded.
+          </p>
+        ) : processing ? (
+          <ProcessingStatus stage={processing.stage} />
+        ) : null}
+
         {insightsError ? (
           <p
             className="mt-5 rounded-md bg-red-50 p-4 text-sm text-red-800"
@@ -251,6 +270,30 @@ async function MeetingDetailContent({
         />
       </div>
     </main>
+  );
+}
+
+function ProcessingStatus({ stage }: { stage: MeetingProcessingStage }) {
+  const messages: Record<MeetingProcessingStage, string> = {
+    pending: "Meeting processing is queued.",
+    transcribing: "The meeting transcript is being processed.",
+    analyzing: "Meeting intelligence is being generated.",
+    completed: "Meeting processing is complete.",
+    failed: "Meeting intelligence generation failed. You can try again.",
+  };
+  const isFailed = stage === "failed";
+
+  return (
+    <p
+      className={`mt-5 rounded-md p-4 text-sm ${
+        isFailed
+          ? "bg-red-50 text-red-800"
+          : "bg-blue-50 text-blue-800"
+      }`}
+      role={isFailed ? "alert" : "status"}
+    >
+      {messages[stage]}
+    </p>
   );
 }
 

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -34,6 +35,27 @@ def _bearer_token(authorization: str | None) -> str:
 def _server_error(message: str, stage: str, error: Exception) -> HTTPException:
     logger.error("%s failed (%s).", stage, type(error).__name__)
     return HTTPException(status_code=500, detail=message)
+
+
+def _upsert_processing_state(
+    supabase: Any,
+    meeting_id: str,
+    stage: str,
+    *,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    supabase.schema("public").table("meeting_processing").upsert(
+        {
+            "meeting_id": meeting_id,
+            "stage": stage,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "error_message": error_message,
+        },
+        on_conflict="meeting_id",
+    ).execute()
 
 
 @router.post("/{meeting_id}/insights")
@@ -121,12 +143,41 @@ def generate_meeting_insights(
             detail="The meeting transcript could not be processed.",
         )
 
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        _upsert_processing_state(
+            supabase,
+            meeting_id_value,
+            "analyzing",
+            started_at=started_at,
+        )
+    except Exception as exc:
+        raise _server_error(
+            "Unable to start meeting intelligence processing.",
+            "Processing state update",
+            exc,
+        ) from exc
+
     try:
         insights: MeetingInsights = GeminiMeetingInsightsProvider().generate(
             transcript_text
         )
     except Exception as exc:
         logger.error("Gemini insights generation failed (%s).", type(exc).__name__)
+        try:
+            _upsert_processing_state(
+                supabase,
+                meeting_id_value,
+                "failed",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                error_message="Meeting intelligence generation failed.",
+            )
+        except Exception as state_exc:
+            logger.error(
+                "Unable to record failed processing state (%s).",
+                type(state_exc).__name__,
+            )
         raise HTTPException(
             status_code=502,
             detail="Meeting intelligence generation failed.",
@@ -154,6 +205,20 @@ def generate_meeting_insights(
             .execute()
         )
     except Exception as exc:
+        try:
+            _upsert_processing_state(
+                supabase,
+                meeting_id_value,
+                "failed",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                error_message="Meeting intelligence could not be saved.",
+            )
+        except Exception as state_exc:
+            logger.error(
+                "Unable to record failed processing state (%s).",
+                type(state_exc).__name__,
+            )
         raise _server_error(
             "Unable to save meeting intelligence.",
             "Meeting insights upsert",
@@ -161,9 +226,38 @@ def generate_meeting_insights(
         ) from exc
 
     if saved_result.data is None:
+        try:
+            _upsert_processing_state(
+                supabase,
+                meeting_id_value,
+                "failed",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                error_message="Meeting intelligence could not be saved.",
+            )
+        except Exception as state_exc:
+            logger.error(
+                "Unable to record failed processing state (%s).",
+                type(state_exc).__name__,
+            )
         raise HTTPException(
             status_code=500,
             detail="Meeting intelligence could not be saved.",
         )
+
+    try:
+        _upsert_processing_state(
+            supabase,
+            meeting_id_value,
+            "completed",
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as exc:
+        raise _server_error(
+            "Meeting intelligence was saved, but processing status could not be updated.",
+            "Processing completion update",
+            exc,
+        ) from exc
 
     return saved_result.data
