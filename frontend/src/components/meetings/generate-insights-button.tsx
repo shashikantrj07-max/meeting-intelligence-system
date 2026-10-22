@@ -7,12 +7,14 @@ import { generateMeetingInsights } from "@/lib/meeting-insights";
 type GenerateInsightsButtonProps = {
     meetingId: string;
     hasExistingInsights?: boolean;
+    canRetry?: boolean;
     disabled?: boolean;
 };
 
 export function GenerateInsightsButton({
     meetingId,
     hasExistingInsights = false,
+    canRetry = false,
     disabled = false,
 }: GenerateInsightsButtonProps) {
     const [loading, setLoading] = useState(false);
@@ -46,7 +48,9 @@ export function GenerateInsightsButton({
             >
                 {loading
                     ? "Generating..."
-                    : hasExistingInsights
+                    : canRetry
+                      ? "Retry Intelligence"
+                      : hasExistingInsights
                       ? "Regenerate Intelligence"
                       : "Generate Intelligence"}
             </button>

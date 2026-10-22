@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +11,7 @@ from app.services.supabase import create_request_supabase_client
 
 router = APIRouter(prefix="/api/meetings", tags=["meeting insights"])
 logger = logging.getLogger(__name__)
+PROCESSING_STALE_AFTER = timedelta(minutes=5)
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -37,25 +38,104 @@ def _server_error(message: str, stage: str, error: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=message)
 
 
-def _upsert_processing_state(
+def _claim_processing(
     supabase: Any,
     meeting_id: str,
+    started_at: str,
+    stale_before: str,
+) -> bool:
+    table = supabase.schema("public").table("meeting_processing")
+    update_values = {
+        "stage": "analyzing",
+        "started_at": started_at,
+        "completed_at": None,
+        "error_message": None,
+    }
+
+    reclaimed = (
+        table.update(update_values)
+        .eq("meeting_id", meeting_id)
+        .in_("stage", ["failed", "completed"])
+        .select("meeting_id")
+        .execute()
+    )
+    if reclaimed.data:
+        return True
+
+    stale_reclaimed = (
+        table.update(update_values)
+        .eq("meeting_id", meeting_id)
+        .eq("stage", "analyzing")
+        .lt("started_at", stale_before)
+        .select("meeting_id")
+        .execute()
+    )
+    if stale_reclaimed.data:
+        return True
+
+    try:
+        inserted = (
+            table.insert(
+                {
+                    "meeting_id": meeting_id,
+                    **update_values,
+                }
+            )
+            .select("meeting_id")
+            .execute()
+        )
+    except Exception as exc:
+        if getattr(exc, "code", None) == "23505":
+            return False
+        raise
+
+    return bool(inserted.data)
+
+
+def _update_processing_attempt(
+    supabase: Any,
+    meeting_id: str,
+    started_at: str,
     stage: str,
     *,
-    started_at: str | None = None,
-    completed_at: str | None = None,
+    completed_at: str,
     error_message: str | None = None,
-) -> None:
-    supabase.schema("public").table("meeting_processing").upsert(
-        {
-            "meeting_id": meeting_id,
-            "stage": stage,
-            "started_at": started_at,
-            "completed_at": completed_at,
-            "error_message": error_message,
-        },
-        on_conflict="meeting_id",
-    ).execute()
+) -> bool:
+    result = (
+        supabase.schema("public")
+        .table("meeting_processing")
+        .update(
+            {
+                "stage": stage,
+                "completed_at": completed_at,
+                "error_message": error_message,
+            }
+        )
+        .eq("meeting_id", meeting_id)
+        .eq("stage", "analyzing")
+        .eq("started_at", started_at)
+        .select("meeting_id")
+        .execute()
+    )
+    return bool(result.data)
+
+
+def _is_current_processing_attempt(
+    supabase: Any,
+    meeting_id: str,
+    started_at: str,
+) -> bool:
+    result = (
+        supabase.schema("public")
+        .table("meeting_processing")
+        .select("meeting_id")
+        .eq("meeting_id", meeting_id)
+        .eq("stage", "analyzing")
+        .eq("started_at", started_at)
+        .maybe_single()
+        .execute()
+    )
+    return result.data is not None
 
 
 def _mark_processing_failed(
@@ -65,14 +145,16 @@ def _mark_processing_failed(
     error_message: str,
 ) -> None:
     try:
-        _upsert_processing_state(
+        updated = _update_processing_attempt(
             supabase,
             meeting_id,
+            started_at,
             "failed",
-            started_at=started_at,
             completed_at=datetime.now(timezone.utc).isoformat(),
             error_message=error_message,
         )
+        if not updated:
+            logger.info("Skipping failure update for a superseded processing attempt.")
     except Exception as exc:
         logger.error(
             "Unable to record failed processing state (%s).",
@@ -110,6 +192,10 @@ def _generate_and_save_insights(
     }
 
     try:
+        if not _is_current_processing_attempt(supabase, meeting_id, started_at):
+            logger.info("Skipping save for a superseded processing attempt.")
+            return
+
         saved_result = (
             supabase.schema("public")
             .table("meeting_insights")
@@ -142,23 +228,19 @@ def _generate_and_save_insights(
         return
 
     try:
-        _upsert_processing_state(
+        completed = _update_processing_attempt(
             supabase,
             meeting_id,
+            started_at,
             "completed",
-            started_at=started_at,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
+        if not completed:
+            logger.info("Skipping completion update for a superseded processing attempt.")
     except Exception as exc:
         logger.error(
             "Unable to record completed processing state (%s).",
             type(exc).__name__,
-        )
-        _mark_processing_failed(
-            supabase,
-            meeting_id,
-            started_at,
-            "Meeting processing could not be completed.",
         )
 
 
@@ -248,13 +330,15 @@ def generate_meeting_insights(
             detail="The meeting transcript could not be processed.",
         )
 
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at_datetime = datetime.now(timezone.utc)
+    started_at = started_at_datetime.isoformat()
+    stale_before = (started_at_datetime - PROCESSING_STALE_AFTER).isoformat()
     try:
-        _upsert_processing_state(
+        claimed = _claim_processing(
             supabase,
             meeting_id_value,
-            "analyzing",
-            started_at=started_at,
+            started_at,
+            stale_before,
         )
     except Exception as exc:
         raise _server_error(
@@ -262,6 +346,12 @@ def generate_meeting_insights(
             "Processing state update",
             exc,
         ) from exc
+
+    if not claimed:
+        raise HTTPException(
+            status_code=409,
+            detail="Meeting intelligence is already being processed.",
+        )
 
     background_tasks.add_task(
         _generate_and_save_insights,

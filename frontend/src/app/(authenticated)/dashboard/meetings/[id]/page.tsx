@@ -3,7 +3,7 @@ import Link from "next/link";
 
 import { DeleteMeetingButton } from "@/components/meetings/delete-meeting-button";
 import { DeleteTranscriptButton } from "@/components/meetings/delete-transcript-button";
-import { MeetingProcessingStatusRefresh } from "@/components/meetings/meeting-processing-status-refresh";
+import { MeetingProcessingControls } from "@/components/meetings/meeting-processing-controls";
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
 import { formatMeetingDate } from "@/lib/meetings";
 import {
@@ -12,9 +12,7 @@ import {
   getMeetingProcessingByMeetingId,
   getTranscriptByMeetingId,
 } from "@/lib/meetings-server";
-import type { Json, MeetingProcessingStage } from "@/types/database";
-
-import { GenerateInsightsButton } from "@/components/meetings/generate-insights-button";
+import type { Json } from "@/types/database";
 
 export default function MeetingDetailPage({
   params,
@@ -76,7 +74,6 @@ async function MeetingDetailContent({
   if (processingError && process.env.NODE_ENV === "development") {
     console.error("Unable to load meeting processing status:", processingError);
   }
-
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-12">
       <Link
@@ -191,7 +188,6 @@ async function MeetingDetailContent({
       </section>
 
       <section className="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-        <MeetingProcessingStatusRefresh stage={processing?.stage ?? null} />
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-zinc-950">
@@ -207,10 +203,12 @@ async function MeetingDetailContent({
             </p>
           </div>
 
-          <GenerateInsightsButton
+          <MeetingProcessingControls
             meetingId={meeting.id}
+            stage={processing?.stage ?? null}
+            startedAt={processing?.started_at ?? null}
             hasExistingInsights={Boolean(insights)}
-            disabled={!transcript}
+            hasTranscript={Boolean(transcript)}
           />
         </div>
 
@@ -221,8 +219,6 @@ async function MeetingDetailContent({
           >
             Processing status could not be loaded.
           </p>
-        ) : processing ? (
-          <ProcessingStatus stage={processing.stage} />
         ) : null}
 
         {insightsError ? (
@@ -272,30 +268,6 @@ async function MeetingDetailContent({
         />
       </div>
     </main>
-  );
-}
-
-function ProcessingStatus({ stage }: { stage: MeetingProcessingStage }) {
-  const messages: Record<MeetingProcessingStage, string> = {
-    pending: "Meeting processing is queued.",
-    transcribing: "The meeting transcript is being processed.",
-    analyzing: "Meeting intelligence is being generated.",
-    completed: "Meeting processing is complete.",
-    failed: "Meeting intelligence generation failed. You can try again.",
-  };
-  const isFailed = stage === "failed";
-
-  return (
-    <p
-      className={`mt-5 rounded-md p-4 text-sm ${
-        isFailed
-          ? "bg-red-50 text-red-800"
-          : "bg-blue-50 text-blue-800"
-      }`}
-      role={isFailed ? "alert" : "status"}
-    >
-      {messages[stage]}
-    </p>
   );
 }
 
