@@ -187,6 +187,11 @@ async function MeetingDetailContent({
             <h2 className="text-lg font-semibold text-zinc-950">
               Meeting Intelligence
             </h2>
+            {insights ? (
+              <p className="mt-1 text-sm text-zinc-500">
+                Last updated {formatMeetingDate(insights.updated_at)}
+              </p>
+            ) : null}
             <p className="mt-1 text-sm text-zinc-600">
               Generate a summary, decisions, action items, and risks from the transcript.
             </p>
