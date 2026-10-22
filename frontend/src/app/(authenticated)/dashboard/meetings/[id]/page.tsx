@@ -199,6 +199,7 @@ async function MeetingDetailContent({
 
           <GenerateInsightsButton
             meetingId={meeting.id}
+            hasExistingInsights={Boolean(insights)}
             disabled={!transcript}
           />
         </div>

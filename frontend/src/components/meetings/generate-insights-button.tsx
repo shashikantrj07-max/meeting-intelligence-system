@@ -6,11 +6,13 @@ import { generateMeetingInsights } from "@/lib/meeting-insights";
 
 type GenerateInsightsButtonProps = {
     meetingId: string;
+    hasExistingInsights?: boolean;
     disabled?: boolean;
 };
 
 export function GenerateInsightsButton({
     meetingId,
+    hasExistingInsights = false,
     disabled = false,
 }: GenerateInsightsButtonProps) {
     const [loading, setLoading] = useState(false);
@@ -42,7 +44,11 @@ export function GenerateInsightsButton({
                 onClick={handleGenerate}
                 className="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-                {loading ? "Generating..." : "Generate Intelligence"}
+                {loading
+                    ? "Generating..."
+                    : hasExistingInsights
+                      ? "Regenerate Intelligence"
+                      : "Generate Intelligence"}
             </button>
 
             {error ? (
