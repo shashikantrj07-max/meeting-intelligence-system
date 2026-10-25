@@ -4,6 +4,7 @@ import Link from "next/link";
 import { DeleteMeetingButton } from "@/components/meetings/delete-meeting-button";
 import { DeleteTranscriptButton } from "@/components/meetings/delete-transcript-button";
 import { MeetingFileDeleteButton } from "@/components/meetings/meeting-file-delete-button";
+import { MeetingFileTranscribeButton } from "@/components/meetings/meeting-file-transcribe-button";
 import { MeetingFileUpload } from "@/components/meetings/meeting-file-upload";
 import { MeetingProcessingControls } from "@/components/meetings/meeting-processing-controls";
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
@@ -293,10 +294,16 @@ async function MeetingDetailContent({
                       {file.mime_type} · {formatFileSize(file.file_size_bytes)}
                     </p>
                   </div>
-                  <MeetingFileDeleteButton
-                    fileId={file.id}
-                    storagePath={file.storage_path}
-                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <MeetingFileTranscribeButton
+                      meetingId={meeting.id}
+                      fileId={file.id}
+                    />
+                    <MeetingFileDeleteButton
+                      fileId={file.id}
+                      storagePath={file.storage_path}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>
@@ -355,9 +362,9 @@ function InsightList({
               key={index}
             >
               {typeof item === "object" &&
-              item !== null &&
-              "text" in item &&
-              typeof item.text === "string" ? (
+                item !== null &&
+                "text" in item &&
+                typeof item.text === "string" ? (
                 <>
                   <p className="whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
                     {item.text}

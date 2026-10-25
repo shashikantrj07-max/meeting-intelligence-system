@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.meeting_insights import router as meeting_insights_router
 
+from app.routers.meeting_transcription import (
+    router as meeting_transcription_router,
+)
+
 app = FastAPI(title="Meeting Intelligence System API")
 
 app.add_middleware(
@@ -18,6 +22,7 @@ app.add_middleware(
 
 app.include_router(meeting_insights_router)
 
+app.include_router(meeting_transcription_router)
 
 @app.get("/health")
 def health() -> dict[str, str]:

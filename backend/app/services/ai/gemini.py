@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from google import genai
 from google.genai import types
 
@@ -7,51 +9,130 @@ from app.config import settings
 from app.schemas.meeting_insights import MeetingInsights
 
 
-class GeminiMeetingInsightsProvider:
-    """Simple Gemini-backed meeting insights provider for structured transcript analysis."""
+logger = logging.getLogger(__name__)
 
-    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+# Maximum time allowed for one Gemini HTTP request.
+# 120 seconds is intentionally generous for a meeting transcript.
+GEMINI_REQUEST_TIMEOUT_MS = 120_000
+
+
+class GeminiMeetingInsightsProvider:
+    """Gemini-backed provider for structured meeting intelligence."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> None:
         self.api_key = api_key or settings.GEMINI_API_KEY
         self.model = model or settings.GEMINI_MODEL
+
         if not self.api_key or not self.api_key.strip():
             raise ValueError("GEMINI_API_KEY is not configured.")
 
-        self.client = genai.Client(api_key=self.api_key)
+        if not self.model or not self.model.strip():
+            raise ValueError("GEMINI_MODEL is not configured.")
+
+        logger.info(
+            "Initializing Gemini meeting insights provider with model=%s",
+            self.model,
+        )
+
+        self.client = genai.Client(
+            api_key=self.api_key,
+            http_options=types.HttpOptions(
+                timeout=GEMINI_REQUEST_TIMEOUT_MS,
+            ),
+        )
 
     def generate(self, transcript: str) -> MeetingInsights:
         if transcript is None or not transcript.strip():
-            raise ValueError("Transcript content is required to generate meeting insights.")
+            raise ValueError(
+                "Transcript content is required to generate meeting insights."
+            )
+
+        transcript = transcript.strip()
+
+        logger.info(
+            "Starting Gemini meeting intelligence generation: "
+            "model=%s transcript_length=%d",
+            self.model,
+            len(transcript),
+        )
 
         prompt = (
-            "You are extracting structured meeting intelligence from the transcript only. "
-            "Use only information present in the transcript. Never invent decisions, action items, "
-            "owners, dates, or risks. Return empty arrays when there is no evidence. "
-            "Produce a concise but useful summary. Extract concrete decisions. Extract concrete "
-            "action items. Identify risks/blockers only when supported by the transcript."
+            "You are extracting structured meeting intelligence from the "
+            "transcript only.\n\n"
+            "Use only information explicitly present in the transcript. "
+            "Never invent decisions, action items, owners, dates, deadlines, "
+            "risks, blockers, or other facts.\n\n"
+            "Return empty arrays when there is no evidence.\n\n"
+            "Produce a concise but useful summary.\n"
+            "Extract concrete decisions.\n"
+            "Extract concrete action items.\n"
+            "Identify risks or blockers only when supported by the transcript."
+            "\n\n"
+            f"Transcript:\n{transcript}"
         )
 
         try:
+            logger.info(
+                "Sending meeting transcript to Gemini: meeting_model=%s",
+                self.model,
+            )
+
             response = self.client.models.generate_content(
                 model=self.model,
-                contents=[
-                    {
-                        "text": (
-                            f"{prompt}\n\nTranscript:\n{transcript}"
-                        )
-                    }
-                ],
+                contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=MeetingInsights,
                 ),
             )
+
+            logger.info(
+                "Gemini request completed successfully: model=%s",
+                self.model,
+            )
+
         except Exception as exc:
-            raise RuntimeError(f"Gemini API request failed: {exc}") from exc
+            logger.exception(
+                "Gemini API request failed: model=%s error_type=%s",
+                self.model,
+                type(exc).__name__,
+            )
+
+            raise RuntimeError(
+                f"Gemini API request failed: {exc}"
+            ) from exc
 
         try:
             payload = response.text
+
             if not payload or not payload.strip():
-                raise ValueError("Gemini returned an empty structured response.")
-            return MeetingInsights.model_validate_json(payload)
+                raise ValueError(
+                    "Gemini returned an empty structured response."
+                )
+
+            logger.info(
+                "Gemini returned structured response: characters=%d",
+                len(payload),
+            )
+
+            insights = MeetingInsights.model_validate_json(payload)
+
+            logger.info(
+                "Gemini meeting intelligence validated successfully."
+            )
+
+            return insights
+
         except Exception as exc:
-            raise ValueError(f"Gemini response validation failed: {exc}") from exc
+            logger.exception(
+                "Gemini response validation failed: error_type=%s",
+                type(exc).__name__,
+            )
+
+            raise ValueError(
+                f"Gemini response validation failed: {exc}"
+            ) from exc
