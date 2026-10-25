@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  filterGeneratedActionItems,
   findTrackedActionItem,
   isMeetingActionItemStatus,
+  type ActionItemFilter,
   type GeneratedActionItem,
   type TrackedActionItem,
 } from "@/lib/meeting-action-items-shared";
@@ -29,6 +31,13 @@ const statusOptions: MeetingActionItemStatus[] = [
   "in_progress",
   "completed",
 ];
+const filterOptions: { value: ActionItemFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "open", label: "Open" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "completed", label: "Completed" },
+  { value: "overdue", label: "Overdue" },
+];
 
 export function MeetingActionItems({
   meetingId,
@@ -39,6 +48,7 @@ export function MeetingActionItems({
   const [loading, setLoading] = useState(items.length > 0);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ActionItemFilter>("all");
 
   const loadTrackedItems = useCallback(async () => {
     setLoading(true);
@@ -92,10 +102,18 @@ export function MeetingActionItems({
     status: MeetingActionItemStatus,
   ) {
     const previousStatus = actionItem.status;
+    const previousOverdue = actionItem.is_overdue;
     setError(null);
     setTrackedItems((current) =>
       current.map((item) =>
-        item.id === actionItem.id ? { ...item, status } : item,
+        item.id === actionItem.id
+          ? {
+              ...item,
+              status,
+              is_overdue:
+                status === "completed" ? false : item.is_overdue,
+            }
+          : item,
       ),
     );
     setUpdatingId(actionItem.id);
@@ -113,7 +131,11 @@ export function MeetingActionItems({
       setTrackedItems((current) =>
         current.map((item) =>
           item.id === actionItem.id
-            ? { ...item, status: previousStatus }
+            ? {
+                ...item,
+                status: previousStatus,
+                is_overdue: previousOverdue,
+              }
             : item,
         ),
       );
@@ -130,6 +152,7 @@ export function MeetingActionItems({
   const completedCount = items.filter(
     (item) => findTrackedActionItem(item.text, trackedItems)?.status === "completed",
   ).length;
+  const visibleItems = filterGeneratedActionItems(items, trackedItems, filter);
 
   return (
     <section>
@@ -169,85 +192,117 @@ export function MeetingActionItems({
               </p>
             </>
           )}
-          <ul className="mt-3 space-y-3">
-            {items.map((item, index) => {
-              const trackedItem = findTrackedActionItem(item.text, trackedItems);
-              const completed = trackedItem?.status === "completed";
-              return (
-                <li
-                  className={`rounded-lg border p-4 ${
-                    completed
-                      ? "border-emerald-200 bg-emerald-50"
-                      : "border-zinc-200 bg-zinc-50"
-                  }`}
-                  key={`${item.text}-${index}`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
-                      {item.text}
-                    </p>
-                    {trackedItem ? (
-                      <label className="flex items-center gap-2 text-xs font-medium text-zinc-700">
-                        Status
-                        <select
-                          aria-label={`Status for ${item.text}`}
-                          className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
-                          disabled={
-                            loading || updatingId === trackedItem.id
-                          }
-                          onChange={(event) => {
-                            const status = event.currentTarget.value;
-                            if (isMeetingActionItemStatus(status)) {
-                              void changeStatus(trackedItem, status);
-                            }
-                          }}
-                          value={trackedItem.status}
-                        >
-                          {statusOptions.map((status) => (
-                            <option key={status} value={status}>
-                              {statusLabels[status]}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    ) : (
-                      <span className="text-xs text-zinc-600">
-                        Status: {loading ? "Loading..." : "Unavailable"}
-                      </span>
-                    )}
-                  </div>
-                  {item.owner ? (
-                    <p className="mt-2 text-xs text-zinc-600">
-                      <span className="font-medium text-zinc-700">Owner:</span>{" "}
-                      {item.owner}
-                    </p>
-                  ) : null}
-                  {item.due_date ? (
-                    <p className="mt-1 text-xs text-zinc-600">
-                      <span className="font-medium text-zinc-700">Due:</span>{" "}
-                      {item.due_date}
-                    </p>
-                  ) : null}
-                  {item.priority ? (
-                    <p className="mt-1 text-xs text-zinc-600">
-                      <span className="font-medium text-zinc-700">
-                        Priority:
-                      </span>{" "}
-                      {item.priority}
-                    </p>
-                  ) : null}
-                  {item.evidence ? (
-                    <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-600">
-                      <span className="font-medium text-zinc-700">
-                        Supporting transcript evidence:
-                      </span>{" "}
-                      <span className="italic">{item.evidence}</span>
-                    </p>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+          <label className="mt-4 flex w-fit items-center gap-2 text-sm font-medium text-zinc-700">
+            Filter
+            <select
+              aria-label="Filter action items"
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+              disabled={loading || Boolean(error)}
+              onChange={(event) => {
+                const selected = filterOptions.find(
+                  (option) => option.value === event.currentTarget.value,
+                );
+                setFilter(selected?.value ?? "all");
+              }}
+              value={filter}
+            >
+              {filterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {visibleItems.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-600">
+              No action items match this filter.
+            </p>
+          ) : (
+            <ul className="mt-3 space-y-3">
+              {visibleItems.map(({ generated: item, tracked }, index) => {
+                const completed = tracked?.status === "completed";
+                const overdue = tracked?.is_overdue === true && !completed;
+                return (
+                  <li
+                    className={`rounded-lg border p-4 ${
+                      completed
+                        ? "border-emerald-200 bg-emerald-50"
+                        : "border-zinc-200 bg-zinc-50"
+                    }`}
+                    key={`${item.text}-${index}`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
+                        {item.text}
+                      </p>
+                      {tracked ? (
+                        <label className="flex items-center gap-2 text-xs font-medium text-zinc-700">
+                          Status
+                          <select
+                            aria-label={`Status for ${item.text}`}
+                            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
+                            disabled={loading || updatingId === tracked.id}
+                            onChange={(event) => {
+                              const status = event.currentTarget.value;
+                              if (isMeetingActionItemStatus(status)) {
+                                void changeStatus(tracked, status);
+                              }
+                            }}
+                            value={tracked.status}
+                          >
+                            {statusOptions.map((status) => (
+                              <option key={status} value={status}>
+                                {statusLabels[status]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : (
+                        <span className="text-xs text-zinc-600">
+                          Status: {loading ? "Loading..." : "Unavailable"}
+                        </span>
+                      )}
+                    </div>
+                    {item.owner ? (
+                      <p className="mt-2 text-xs text-zinc-600">
+                        <span className="font-medium text-zinc-700">
+                          Owner:
+                        </span>{" "}
+                        {item.owner}
+                      </p>
+                    ) : null}
+                    {item.due_date ? (
+                      <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
+                        <span className="font-medium text-zinc-700">Due:</span>{" "}
+                        {item.due_date}
+                        {overdue ? (
+                          <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-800">
+                            Overdue
+                          </span>
+                        ) : null}
+                      </p>
+                    ) : null}
+                    {item.priority ? (
+                      <p className="mt-1 text-xs text-zinc-600">
+                        <span className="font-medium text-zinc-700">
+                          Priority:
+                        </span>{" "}
+                        {item.priority}
+                      </p>
+                    ) : null}
+                    {item.evidence ? (
+                      <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-600">
+                        <span className="font-medium text-zinc-700">
+                          Supporting transcript evidence:
+                        </span>{" "}
+                        <span className="italic">{item.evidence}</span>
+                      </p>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </>
       )}
     </section>

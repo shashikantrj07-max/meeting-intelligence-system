@@ -27,6 +27,7 @@ class TrackedActionItem(BaseModel):
     priority: str | None = None
     evidence: str | None = None
     status: ActionItemStatus
+    is_overdue: bool
     created_at: str
     updated_at: str
 
@@ -35,3 +36,13 @@ class TrackedActionItemsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[TrackedActionItem]
+
+
+class ActionItemAccountabilitySummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total: int
+    open: int
+    in_progress: int
+    completed: int
+    overdue: int

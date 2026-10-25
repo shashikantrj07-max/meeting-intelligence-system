@@ -13,8 +13,19 @@ export type TrackedActionItem = GeneratedActionItem & {
   meeting_id: string;
   identity_key: string;
   status: MeetingActionItemStatus;
+  is_overdue: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type ActionItemFilter =
+  | "all"
+  | MeetingActionItemStatus
+  | "overdue";
+
+export type GeneratedActionItemWithTracking = {
+  generated: GeneratedActionItem;
+  tracked: TrackedActionItem | undefined;
 };
 
 const actionItemStatuses: MeetingActionItemStatus[] = [
@@ -71,6 +82,27 @@ export function findTrackedActionItem(
   );
 }
 
+export function filterGeneratedActionItems(
+  items: GeneratedActionItem[],
+  trackedItems: TrackedActionItem[],
+  filter: ActionItemFilter,
+): GeneratedActionItemWithTracking[] {
+  return items
+    .map((generated) => ({
+      generated,
+      tracked: findTrackedActionItem(generated.text, trackedItems),
+    }))
+    .filter(({ tracked }) => {
+      if (filter === "all") {
+        return true;
+      }
+      if (filter === "overdue") {
+        return tracked?.is_overdue === true && tracked.status !== "completed";
+      }
+      return tracked?.status === filter;
+    });
+}
+
 export function parseTrackedActionItems(value: unknown): TrackedActionItem[] {
   if (
     typeof value !== "object" ||
@@ -118,6 +150,8 @@ export function isTrackedActionItem(value: unknown): value is TrackedActionItem 
     "status" in value &&
     typeof value.status === "string" &&
     isMeetingActionItemStatus(value.status) &&
+    "is_overdue" in value &&
+    typeof value.is_overdue === "boolean" &&
     "created_at" in value &&
     typeof value.created_at === "string" &&
     "updated_at" in value &&

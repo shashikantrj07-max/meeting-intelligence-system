@@ -2,14 +2,37 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import date, datetime, timezone
 from typing import Any
 
+from app.schemas.meeting_action_items import ActionItemStatus
 from app.schemas.meeting_insights import ActionItem
 
 
 def action_item_identity_key(text: str) -> str:
     normalized_text = re.sub(r"\s+", " ", text).strip().lower()
     return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+
+
+def is_action_item_overdue(
+    due_date: str | None,
+    status: ActionItemStatus,
+    *,
+    today: date | None = None,
+) -> bool:
+    if status == "completed" or not isinstance(due_date, str) or not due_date:
+        return False
+
+    try:
+        parsed_due_date = date.fromisoformat(due_date)
+    except ValueError:
+        return False
+
+    if parsed_due_date.isoformat() != due_date:
+        return False
+
+    current_date = today or datetime.now(timezone.utc).date()
+    return parsed_due_date < current_date
 
 
 def build_tracked_action_item_records(

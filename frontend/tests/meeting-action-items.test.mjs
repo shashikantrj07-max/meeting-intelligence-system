@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   actionItemsResponseError,
+  filterGeneratedActionItems,
   findTrackedActionItem,
   isMeetingActionItemStatus,
   parseGeneratedActionItems,
@@ -53,6 +54,7 @@ test("matches persisted workflow records to regenerated items consistently", () 
     priority: "high",
     evidence: null,
     status: "completed",
+    is_overdue: false,
     created_at: "2026-10-25T00:00:00Z",
     updated_at: "2026-10-25T00:00:00Z",
   };
@@ -79,6 +81,7 @@ test("validates action-item API data and surfaces recoverable server errors", ()
     priority: null,
     evidence: null,
     status: "open",
+    is_overdue: false,
     created_at: "2026-10-25T00:00:00Z",
     updated_at: "2026-10-25T00:00:00Z",
   };
@@ -96,4 +99,71 @@ test("validates action-item API data and surfaces recoverable server errors", ()
     "Action item not found or inaccessible.",
   );
   assert.equal(actionItemsResponseError(null, "Fallback"), "Fallback");
+});
+
+test("filters generated items by persisted status and overdue flag", () => {
+  const generated = parseGeneratedActionItems([
+    { text: "Open overdue task" },
+    { text: "In progress overdue task" },
+    { text: "Completed task" },
+    { text: "Not yet tracked" },
+  ]);
+  const tracked = [
+    {
+      id: "action-1",
+      meeting_id: "meeting-1",
+      identity_key: "a".repeat(64),
+      text: "Open overdue task",
+      owner: null,
+      due_date: "2026-10-24",
+      priority: null,
+      evidence: null,
+      status: "open",
+      is_overdue: true,
+      created_at: "2026-10-25T00:00:00Z",
+      updated_at: "2026-10-25T00:00:00Z",
+    },
+    {
+      id: "action-2",
+      meeting_id: "meeting-1",
+      identity_key: "b".repeat(64),
+      text: "In progress overdue task",
+      owner: null,
+      due_date: "2026-10-24",
+      priority: null,
+      evidence: null,
+      status: "in_progress",
+      is_overdue: true,
+      created_at: "2026-10-25T00:00:00Z",
+      updated_at: "2026-10-25T00:00:00Z",
+    },
+    {
+      id: "action-3",
+      meeting_id: "meeting-1",
+      identity_key: "c".repeat(64),
+      text: "Completed task",
+      owner: null,
+      due_date: "2026-10-24",
+      priority: null,
+      evidence: null,
+      status: "completed",
+      is_overdue: false,
+      created_at: "2026-10-25T00:00:00Z",
+      updated_at: "2026-10-25T00:00:00Z",
+    },
+  ];
+
+  assert.deepEqual(
+    filterGeneratedActionItems(generated, tracked, "overdue").map(
+      ({ generated: item }) => item.text,
+    ),
+    ["Open overdue task", "In progress overdue task"],
+  );
+  assert.deepEqual(
+    filterGeneratedActionItems(generated, tracked, "completed").map(
+      ({ generated: item }) => item.text,
+    ),
+    ["Completed task"],
+  );
+  assert.equal(filterGeneratedActionItems(generated, tracked, "all").length, 4);
 });

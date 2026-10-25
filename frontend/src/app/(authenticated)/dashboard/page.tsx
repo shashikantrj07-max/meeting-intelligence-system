@@ -9,6 +9,7 @@ import {
   isActiveProcessingStage,
   parseDashboardFilters,
 } from "@/lib/dashboard-meetings";
+import { getActionItemAccountabilitySummary } from "@/lib/meeting-action-items-server";
 import { getDashboardMeetings } from "@/lib/meetings-server";
 import { formatMeetingDate } from "@/lib/meetings";
 
@@ -35,7 +36,20 @@ async function DashboardContent({
   searchParams: Promise<DashboardSearchParams>;
 }) {
   const filters = parseDashboardFilters(await searchParams);
-  const { data: meetings, error } = await getDashboardMeetings(filters);
+  const [meetingsResult, accountabilityResult] = await Promise.all([
+    getDashboardMeetings(filters),
+    getActionItemAccountabilitySummary(),
+  ]);
+  if (
+    accountabilityResult.error &&
+    process.env.NODE_ENV === "development"
+  ) {
+    console.error(
+      "Unable to load action-item accountability:",
+      accountabilityResult.error,
+    );
+  }
+  const { data: meetings, error } = meetingsResult;
   const hasActiveFilters =
     filters.search.length > 0 || filters.status !== "all";
 
@@ -65,6 +79,47 @@ async function DashboardContent({
         filters={filters}
         hasActiveFilters={hasActiveFilters}
       />
+      {accountabilityResult.data ? (
+        <section
+          aria-label="Action-item accountability"
+          className="mt-8"
+        >
+          <h2 className="text-lg font-semibold text-zinc-950">
+            Action-item accountability
+          </h2>
+          <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <AccountabilityCard
+              label="Tracked"
+              value={accountabilityResult.data.total}
+            />
+            <AccountabilityCard
+              label="Open"
+              value={accountabilityResult.data.open}
+            />
+            <AccountabilityCard
+              label="In Progress"
+              value={accountabilityResult.data.in_progress}
+            />
+            <AccountabilityCard
+              label="Completed"
+              value={accountabilityResult.data.completed}
+            />
+            <AccountabilityCard
+              label="Overdue"
+              value={accountabilityResult.data.overdue}
+              overdue
+            />
+          </dl>
+        </section>
+      ) : (
+        <p
+          className="mt-6 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+          role="status"
+        >
+          Action-item accountability counts could not be loaded. Refresh the
+          page to retry.
+        </p>
+      )}
 
       {meetings.length === 0 && !hasActiveFilters ? (
         <section className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-14 text-center">
@@ -179,6 +234,29 @@ async function DashboardContent({
         </ul>
       )}
     </main>
+  );
+}
+
+function AccountabilityCard({
+  label,
+  value,
+  overdue = false,
+}: {
+  label: string;
+  value: number;
+  overdue?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-lg border p-4 ${
+        overdue
+          ? "border-red-200 bg-red-50 text-red-900"
+          : "border-zinc-200 bg-white text-zinc-900"
+      }`}
+    >
+      <dt className="text-xs font-medium">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold">{value}</dd>
+    </div>
   );
 }
 

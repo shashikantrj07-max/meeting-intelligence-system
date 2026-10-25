@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.schemas.meeting_insights import ActionItem
 from app.services.meeting_action_items import (
     action_item_identity_key,
     build_tracked_action_item_records,
+    is_action_item_overdue,
     sync_generated_action_items,
 )
 
@@ -105,6 +107,30 @@ class FakeQuery:
         return SimpleNamespace(data=matching)
 
 
+class FakeRpc:
+    def __init__(self, client: "FakeSupabase", function_name: str) -> None:
+        self.client = client
+        self.function_name = function_name
+
+    def execute(self) -> SimpleNamespace:
+        assert self.function_name == "get_my_action_item_accountability_summary"
+        self.client.rpc_calls.append(self.function_name)
+        today = datetime.now(timezone.utc).date()
+        summary = {
+            "total": len(self.client.action_items),
+            "open": 0,
+            "in_progress": 0,
+            "completed": 0,
+            "overdue": 0,
+        }
+        for item in self.client.action_items:
+            status = item["status"]
+            summary[status] += 1
+            if is_action_item_overdue(item.get("due_date"), status, today=today):
+                summary["overdue"] += 1
+        return SimpleNamespace(data=[summary])
+
+
 class FakeSupabase:
     def __init__(self, *, meeting_access: bool = True) -> None:
         self.meeting_access = meeting_access
@@ -119,6 +145,7 @@ class FakeSupabase:
         ]
         self.action_items: list[dict] = []
         self.action_item_updates: list[dict] = []
+        self.rpc_calls: list[str] = []
         self.auth = SimpleNamespace(
             get_user=lambda _token: SimpleNamespace(
                 user=SimpleNamespace(id="owner-id")
@@ -130,6 +157,9 @@ class FakeSupabase:
 
     def table(self, table_name: str) -> FakeQuery:
         return FakeQuery(self, table_name)
+
+    def rpc(self, function_name: str) -> FakeRpc:
+        return FakeRpc(self, function_name)
 
 
 def make_client(monkeypatch: pytest.MonkeyPatch, supabase: FakeSupabase) -> TestClient:
@@ -149,6 +179,23 @@ def test_status_schema_accepts_only_supported_values() -> None:
 
     with pytest.raises(ValidationError):
         ActionItemStatusUpdate(status="blocked")
+
+
+def test_action_item_overdue_date_rules() -> None:
+    today = date(2026, 10, 25)
+    past = (today - timedelta(days=1)).isoformat()
+    future = (today + timedelta(days=1)).isoformat()
+
+    assert is_action_item_overdue(past, "open", today=today)
+    assert is_action_item_overdue(past, "in_progress", today=today)
+    assert not is_action_item_overdue(past, "completed", today=today)
+    assert not is_action_item_overdue(today.isoformat(), "open", today=today)
+    assert not is_action_item_overdue(future, "open", today=today)
+    assert not is_action_item_overdue(None, "open", today=today)
+    assert not is_action_item_overdue("", "open", today=today)
+    assert not is_action_item_overdue("Friday", "open", today=today)
+    assert not is_action_item_overdue("2026-02-30", "open", today=today)
+    assert not is_action_item_overdue("20261024", "open", today=today)
 
 
 def test_identity_and_sync_are_stable_and_preserve_status() -> None:
@@ -218,6 +265,41 @@ def test_sync_and_retrieval_return_meeting_action_items(
     assert len(synced.json()["items"]) == 1
     assert retrieved.json()["items"][0]["text"] == "Send the draft"
     assert retrieved.json()["items"][0]["status"] == "open"
+    assert retrieved.json()["items"][0]["is_overdue"] is False
+
+
+def test_accountability_summary_counts_persisted_status_and_overdue_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    today = datetime.now(timezone.utc).date()
+    past_due_date = (today - timedelta(days=1)).isoformat()
+    supabase = FakeSupabase()
+    supabase.action_items = [
+        {"status": "open", "due_date": past_due_date},
+        {"status": "open", "due_date": today.isoformat()},
+        {"status": "open", "due_date": "not-a-date"},
+        {"status": "in_progress", "due_date": past_due_date},
+        {"status": "completed", "due_date": past_due_date},
+    ]
+    supabase.action_items.extend(
+        {"status": "completed", "due_date": past_due_date} for _ in range(500)
+    )
+    client = make_client(monkeypatch, supabase)
+
+    response = client.get(
+        "/api/meetings/action-items/accountability-summary",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "total": 505,
+        "open": 3,
+        "in_progress": 1,
+        "completed": 501,
+        "overdue": 2,
+    }
+    assert supabase.rpc_calls == ["get_my_action_item_accountability_summary"]
 
 
 def test_action_item_status_update_is_scoped_to_meeting(
