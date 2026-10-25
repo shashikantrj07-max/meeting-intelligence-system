@@ -5,9 +5,12 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.schemas.meeting_action_items import (
+    ActionItemAccountabilityFilter,
+    ActionItemAccountabilityItemsResponse,
+    ActionItemAccountabilityRecord,
     ActionItemAccountabilitySummary,
     ActionItemStatusUpdate,
     TrackedActionItem,
@@ -23,6 +26,7 @@ from app.services.supabase import create_request_supabase_client
 
 router = APIRouter(prefix="/api/meetings", tags=["meeting action items"])
 logger = logging.getLogger(__name__)
+ACCOUNTABILITY_PAGE_SIZE = 25
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -206,6 +210,60 @@ def get_action_item_accountability_summary(
             status_code=500,
             detail="Unable to load action-item accountability summary.",
         ) from exc
+
+
+@router.get(
+    "/action-items/accountability-items",
+    response_model=ActionItemAccountabilityItemsResponse,
+)
+def get_action_item_accountability_items(
+    status: ActionItemAccountabilityFilter = Query(default="all"),
+    page: int = Query(default=1, ge=1, le=100_000),
+    authorization: str | None = Header(default=None),
+) -> ActionItemAccountabilityItemsResponse:
+    supabase = _get_authenticated_client(authorization)
+    offset = (page - 1) * ACCOUNTABILITY_PAGE_SIZE
+    try:
+        result = (
+            supabase.schema("public")
+            .rpc(
+                "get_my_action_item_accountability_items",
+                {"p_status": status, "p_offset": offset},
+            )
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Action-item accountability listing failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item accountability items.",
+        ) from exc
+
+    if not isinstance(result.data, list) or len(result.data) > ACCOUNTABILITY_PAGE_SIZE + 1:
+        logger.error("Action-item accountability listing returned an invalid result.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item accountability items.",
+        )
+    has_more = len(result.data) > ACCOUNTABILITY_PAGE_SIZE
+    try:
+        items = [
+            ActionItemAccountabilityRecord.model_validate(row)
+            for row in result.data[:ACCOUNTABILITY_PAGE_SIZE]
+        ]
+    except Exception as exc:
+        logger.error("Action-item accountability record validation failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item accountability items.",
+        ) from exc
+
+    return ActionItemAccountabilityItemsResponse(
+        items=items,
+        page=page,
+        page_size=ACCOUNTABILITY_PAGE_SIZE,
+        has_more=has_more,
+    )
 
 
 @router.get(

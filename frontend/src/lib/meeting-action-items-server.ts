@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import type { ActionItemAccountabilityFilter } from "@/lib/dashboard-accountability";
 
 export type ActionItemAccountabilitySummary = {
   total: number;
@@ -6,6 +7,24 @@ export type ActionItemAccountabilitySummary = {
   in_progress: number;
   completed: number;
   overdue: number;
+};
+
+export type ActionItemAccountabilityRecord = {
+  id: string;
+  meeting_id: string;
+  meeting_title: string;
+  text: string;
+  owner: string | null;
+  due_date: string | null;
+  status: "open" | "in_progress" | "completed";
+  is_overdue: boolean;
+};
+
+export type ActionItemAccountabilityItems = {
+  items: ActionItemAccountabilityRecord[];
+  page: number;
+  page_size: number;
+  has_more: boolean;
 };
 
 export async function getActionItemAccountabilitySummary(): Promise<{
@@ -71,6 +90,67 @@ export async function getActionItemAccountabilitySummary(): Promise<{
   }
 }
 
+export async function getActionItemAccountabilityItems(
+  filter: ActionItemAccountabilityFilter,
+  page: number,
+): Promise<{
+  data: ActionItemAccountabilityItems | null;
+  error: Error | null;
+}> {
+  const supabase = await createClient();
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+  if (sessionError) {
+    return { data: null, error: sessionError };
+  }
+  if (!session?.access_token) {
+    return {
+      data: null,
+      error: new Error("A signed-in session is required for accountability data."),
+    };
+  }
+
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!baseUrl) {
+    return {
+      data: null,
+      error: new Error("NEXT_PUBLIC_API_BASE_URL is not configured."),
+    };
+  }
+  const query = new URLSearchParams({ status: filter, page: String(page) });
+
+  try {
+    const response = await fetch(
+      `${baseUrl.replace(/\/+$/, "")}/api/meetings/action-items/accountability-items?${query}`,
+      {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        cache: "no-store",
+      },
+    );
+    const body: unknown = await response.json();
+    if (!response.ok) {
+      return { data: null, error: new Error(readErrorDetail(body)) };
+    }
+    if (!isActionItemAccountabilityItems(body)) {
+      return {
+        data: null,
+        error: new Error("The server returned invalid accountability items."),
+      };
+    }
+    return { data: body, error: null };
+  } catch (error) {
+    return {
+      data: null,
+      error:
+        error instanceof Error
+          ? error
+          : new Error("Unable to load action-item accountability items."),
+    };
+  }
+}
+
 function isActionItemAccountabilitySummary(
   value: unknown,
 ): value is ActionItemAccountabilitySummary {
@@ -86,6 +166,45 @@ function isActionItemAccountabilitySummary(
     isCount(summary.overdue) &&
     summary.open + summary.in_progress + summary.completed === summary.total &&
     summary.overdue <= summary.total
+  );
+}
+
+function isActionItemAccountabilityItems(
+  value: unknown,
+): value is ActionItemAccountabilityItems {
+  if (typeof value !== "object" || value === null || !("items" in value)) {
+    return false;
+  }
+  const response = value as Record<string, unknown>;
+  return (
+    Array.isArray(response.items) &&
+    response.items.every(isActionItemAccountabilityRecord) &&
+    isCount(response.page) &&
+    response.page > 0 &&
+    isCount(response.page_size) &&
+    response.page_size > 0 &&
+    typeof response.has_more === "boolean"
+  );
+}
+
+function isActionItemAccountabilityRecord(
+  value: unknown,
+): value is ActionItemAccountabilityRecord {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.meeting_id === "string" &&
+    typeof item.meeting_title === "string" &&
+    typeof item.text === "string" &&
+    (typeof item.owner === "string" || item.owner === null) &&
+    (typeof item.due_date === "string" || item.due_date === null) &&
+    (item.status === "open" ||
+      item.status === "in_progress" ||
+      item.status === "completed") &&
+    typeof item.is_overdue === "boolean"
   );
 }
 

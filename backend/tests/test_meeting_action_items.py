@@ -108,27 +108,67 @@ class FakeQuery:
 
 
 class FakeRpc:
-    def __init__(self, client: "FakeSupabase", function_name: str) -> None:
+    def __init__(
+        self,
+        client: "FakeSupabase",
+        function_name: str,
+        params: dict | None,
+    ) -> None:
         self.client = client
         self.function_name = function_name
+        self.params = params
 
     def execute(self) -> SimpleNamespace:
-        assert self.function_name == "get_my_action_item_accountability_summary"
         self.client.rpc_calls.append(self.function_name)
         today = datetime.now(timezone.utc).date()
-        summary = {
-            "total": len(self.client.action_items),
-            "open": 0,
-            "in_progress": 0,
-            "completed": 0,
-            "overdue": 0,
-        }
+        if self.function_name == "get_my_action_item_accountability_summary":
+            summary = {
+                "total": len(self.client.action_items),
+                "open": 0,
+                "in_progress": 0,
+                "completed": 0,
+                "overdue": 0,
+            }
+            for item in self.client.action_items:
+                status = item["status"]
+                summary[status] += 1
+                if is_action_item_overdue(item.get("due_date"), status, today=today):
+                    summary["overdue"] += 1
+            return SimpleNamespace(data=[summary])
+
+        assert self.function_name == "get_my_action_item_accountability_items"
+        assert self.params is not None
+        self.client.rpc_arguments.append((self.function_name, self.params))
+        requested_status = self.params["p_status"]
+        offset = self.params["p_offset"]
+        rows = []
         for item in self.client.action_items:
-            status = item["status"]
-            summary[status] += 1
-            if is_action_item_overdue(item.get("due_date"), status, today=today):
-                summary["overdue"] += 1
-        return SimpleNamespace(data=[summary])
+            overdue = is_action_item_overdue(
+                item.get("due_date"),
+                item["status"],
+                today=today,
+            )
+            if requested_status == "all":
+                matches = True
+            elif requested_status == "overdue":
+                matches = overdue
+            else:
+                matches = item["status"] == requested_status
+            if matches:
+                rows.append(
+                    {
+                        "id": item["id"],
+                        "meeting_id": item["meeting_id"],
+                        "meeting_title": item["meeting_title"],
+                        "text": item["text"],
+                        "owner": item.get("owner"),
+                        "due_date": item.get("due_date"),
+                        "status": item["status"],
+                        "is_overdue": overdue,
+                    }
+                )
+        rows.sort(key=lambda row: (row["due_date"] is None, row["due_date"] or ""))
+        return SimpleNamespace(data=rows[offset : offset + 26])
 
 
 class FakeSupabase:
@@ -146,11 +186,14 @@ class FakeSupabase:
         self.action_items: list[dict] = []
         self.action_item_updates: list[dict] = []
         self.rpc_calls: list[str] = []
-        self.auth = SimpleNamespace(
-            get_user=lambda _token: SimpleNamespace(
-                user=SimpleNamespace(id="owner-id")
-            )
-        )
+        self.rpc_arguments: list[tuple[str, dict]] = []
+        self.verified_tokens: list[str] = []
+
+        def get_user(token: str) -> SimpleNamespace:
+            self.verified_tokens.append(token)
+            return SimpleNamespace(user=SimpleNamespace(id="owner-id"))
+
+        self.auth = SimpleNamespace(get_user=get_user)
 
     def schema(self, _name: str) -> "FakeSupabase":
         return self
@@ -158,8 +201,8 @@ class FakeSupabase:
     def table(self, table_name: str) -> FakeQuery:
         return FakeQuery(self, table_name)
 
-    def rpc(self, function_name: str) -> FakeRpc:
-        return FakeRpc(self, function_name)
+    def rpc(self, function_name: str, params: dict | None = None) -> FakeRpc:
+        return FakeRpc(self, function_name, params)
 
 
 def make_client(monkeypatch: pytest.MonkeyPatch, supabase: FakeSupabase) -> TestClient:
@@ -300,6 +343,154 @@ def test_accountability_summary_counts_persisted_status_and_overdue_items(
         "overdue": 2,
     }
     assert supabase.rpc_calls == ["get_my_action_item_accountability_summary"]
+
+
+def test_accountability_items_require_auth_and_validate_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supabase = FakeSupabase()
+    client = make_client(monkeypatch, supabase)
+
+    unauthenticated = client.get(
+        "/api/meetings/action-items/accountability-items?status=open",
+    )
+    invalid_filter = client.get(
+        "/api/meetings/action-items/accountability-items?status=blocked",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert unauthenticated.status_code == 401
+    assert invalid_filter.status_code == 422
+    assert supabase.rpc_arguments == []
+
+
+def test_accountability_filters_match_summary_and_overdue_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    today = datetime.now(timezone.utc).date()
+    past = (today - timedelta(days=1)).isoformat()
+    future = (today + timedelta(days=1)).isoformat()
+    due_items = [
+        ("open-past", "open", past),
+        ("progress-past", "in_progress", past),
+        ("completed-past", "completed", past),
+        ("open-today", "open", today.isoformat()),
+        ("open-future", "open", future),
+        ("open-invalid", "open", "2026-02-30"),
+        ("open-freeform", "open", "Friday"),
+        ("open-missing", "open", None),
+    ]
+    supabase = FakeSupabase()
+    supabase.action_items = [
+        {
+            "id": f"00000000-0000-0000-0000-{index:012d}",
+            "meeting_id": MEETING_ID,
+            "meeting_title": "Planning",
+            "text": text,
+            "owner": None,
+            "due_date": due_date,
+            "status": status,
+        }
+        for index, (text, status, due_date) in enumerate(due_items, start=1)
+    ]
+    client = make_client(monkeypatch, supabase)
+    headers = {"Authorization": "Bearer test-token"}
+
+    expected = {
+        "all": 8,
+        "open": 6,
+        "in_progress": 1,
+        "completed": 1,
+        "overdue": 2,
+    }
+    responses = {
+        filter_value: client.get(
+            "/api/meetings/action-items/accountability-items",
+            params={"status": filter_value},
+            headers=headers,
+        )
+        for filter_value in expected
+    }
+
+    for filter_value, count in expected.items():
+        response = responses[filter_value]
+        assert response.status_code == 200, response.text
+        assert len(response.json()["items"]) == count
+
+    overdue_items = responses["overdue"].json()["items"]
+    assert {item["text"] for item in overdue_items} == {
+        "open-past",
+        "progress-past",
+    }
+    assert all(item["is_overdue"] for item in overdue_items)
+    all_items = {
+        item["text"]: item
+        for item in responses["all"].json()["items"]
+    }
+    assert all_items["completed-past"]["is_overdue"] is False
+    assert all_items["open-today"]["is_overdue"] is False
+    assert all_items["open-future"]["is_overdue"] is False
+    assert all_items["open-invalid"]["is_overdue"] is False
+    assert all_items["open-freeform"]["is_overdue"] is False
+    assert all_items["open-missing"]["is_overdue"] is False
+
+    summary = client.get(
+        "/api/meetings/action-items/accountability-summary",
+        headers=headers,
+    )
+    assert summary.status_code == 200
+    assert summary.json()["overdue"] == len(overdue_items)
+    assert all(
+        "user_id" not in parameters
+        for _, parameters in supabase.rpc_arguments
+    )
+    assert all(
+        function_name == "get_my_action_item_accountability_items"
+        for function_name, _ in supabase.rpc_arguments
+    )
+    assert supabase.verified_tokens == ["test-token"] * (
+        len(expected) + 1
+    )
+    assert all(
+        set(parameters) == {"p_status", "p_offset"}
+        for _, parameters in supabase.rpc_arguments
+    )
+
+
+def test_accountability_items_are_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supabase = FakeSupabase()
+    supabase.action_items = [
+        {
+            "id": f"00000000-0000-0000-0000-{index:012d}",
+            "meeting_id": MEETING_ID,
+            "meeting_title": "Planning",
+            "text": f"Task {index}",
+            "owner": None,
+            "due_date": None,
+            "status": "open",
+        }
+        for index in range(1, 28)
+    ]
+    client = make_client(monkeypatch, supabase)
+    headers = {"Authorization": "Bearer test-token"}
+
+    first = client.get(
+        "/api/meetings/action-items/accountability-items",
+        headers=headers,
+    )
+    second = client.get(
+        "/api/meetings/action-items/accountability-items?page=2",
+        headers=headers,
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert len(first.json()["items"]) == 25
+    assert first.json()["has_more"] is True
+    assert len(second.json()["items"]) == 2
+    assert second.json()["has_more"] is False
+    assert second.json()["page"] == 2
 
 
 def test_action_item_status_update_is_scoped_to_meeting(

@@ -7,6 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ActionItemStatus = Literal["open", "in_progress", "completed"]
+ActionItemAccountabilityFilter = Literal[
+    "all",
+    "open",
+    "in_progress",
+    "completed",
+    "overdue",
+]
 
 
 class ActionItemStatusUpdate(BaseModel):
@@ -46,3 +53,25 @@ class ActionItemAccountabilitySummary(BaseModel):
     in_progress: int
     completed: int
     overdue: int
+
+
+class ActionItemAccountabilityRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    meeting_id: UUID
+    meeting_title: str
+    text: str = Field(min_length=1)
+    owner: str | None = None
+    due_date: str | None = None
+    status: ActionItemStatus
+    is_overdue: bool
+
+
+class ActionItemAccountabilityItemsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ActionItemAccountabilityRecord]
+    page: int
+    page_size: int
+    has_more: bool

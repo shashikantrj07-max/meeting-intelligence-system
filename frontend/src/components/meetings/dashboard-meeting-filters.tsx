@@ -1,10 +1,11 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { FormEvent } from "react";
 
 import type { DashboardFilters } from "@/lib/dashboard-meetings";
+import { buildDashboardFilterHref } from "@/lib/dashboard-accountability";
 
 type DashboardMeetingFiltersProps = {
   filters: DashboardFilters;
@@ -16,23 +17,20 @@ export function DashboardMeetingFilters({
   hasActiveFilters,
 }: DashboardMeetingFiltersProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const formKey = `${filters.search}:${filters.status}`;
 
   function navigate(form: HTMLFormElement) {
     const values = new FormData(form);
-    const query = new URLSearchParams();
     const search = values.get("q");
     const status = values.get("status");
-
-    if (typeof search === "string" && search.trim()) {
-      query.set("q", search.trim().slice(0, 200));
-    }
-    if (typeof status === "string" && status !== "all") {
-      query.set("status", status);
-    }
-
-    const queryString = query.toString();
-    router.push(queryString ? `/dashboard?${queryString}` : "/dashboard");
+    router.push(
+      buildDashboardFilterHref(
+        searchParams.toString(),
+        typeof search === "string" ? search : "",
+        typeof status === "string" ? status : "all",
+      ),
+    );
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
