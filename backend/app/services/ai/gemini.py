@@ -32,6 +32,40 @@ def _remove_additional_properties(value: object) -> None:
             _remove_additional_properties(nested_value)
 
 
+def _build_prompt(transcript: str) -> str:
+    return (
+        "You are extracting structured meeting intelligence from the "
+        "transcript only.\n\n"
+        "Use only information explicitly present in the transcript. "
+        "Never invent decisions, action items, owners, dates, deadlines, "
+        "risks, blockers, questions, or next steps.\n"
+        "Return empty arrays when there is no evidence. Return an item only "
+        "when it is supported by the transcript.\n"
+        "For every extracted item, provide evidence as a concise excerpt "
+        "copied directly from the transcript. Never invent evidence. If no "
+        "reliable supporting excerpt exists, set evidence to null.\n\n"
+        "Produce a concise but useful summary.\n"
+        "Extract key decisions only when an actual decision or commitment "
+        "was reached in the meeting. Do not classify ordinary discussion, "
+        "suggestions, opinions, or historical statements as decisions.\n"
+        "Extract action items only for concrete tasks or commitments, not "
+        "general discussion. Set text to the concrete task. Include an "
+        "owner, due date, or priority only when explicitly supported by "
+        "the transcript; do not infer an owner or deadline because a person "
+        "was mentioned.\n"
+        "Identify risks or blockers only when the transcript supports an "
+        "actual concern, obstacle, dependency, or potential problem. Do not "
+        "treat ordinary technical discussion as a risk automatically.\n"
+        "Extract discussion points as substantive topics or issues "
+        "discussed in the meeting.\n"
+        "Extract open questions as questions or issues that remain "
+        "unresolved according to the transcript.\n"
+        "Extract next steps as concrete follow-up activities supported "
+        "by the transcript.\n\n"
+        f"Transcript:\n{transcript}"
+    )
+
+
 class GeminiMeetingInsightsProvider:
     """Gemini-backed provider for structured meeting intelligence."""
 
@@ -76,26 +110,7 @@ class GeminiMeetingInsightsProvider:
             len(transcript),
         )
 
-        prompt = (
-            "You are extracting structured meeting intelligence from the "
-            "transcript only.\n\n"
-            "Use only information explicitly present in the transcript. "
-            "Never invent decisions, action items, owners, dates, deadlines, "
-            "risks, blockers, questions, or next steps.\n\n"
-            "Return empty arrays when there is no evidence.\n\n"
-            "Produce a concise but useful summary.\n"
-            "Extract concrete decisions.\n"
-            "Extract concrete action items.\n"
-            "Identify risks or blockers only when supported by the transcript.\n"
-            "Extract discussion points as substantive topics or issues "
-            "discussed in the meeting.\n"
-            "Extract open questions as questions or issues that remain "
-            "unresolved according to the transcript.\n"
-            "Extract next steps as concrete follow-up activities supported "
-            "by the transcript."
-            "\n\n"
-            f"Transcript:\n{transcript}"
-        )
+        prompt = _build_prompt(transcript)
 
         try:
             logger.info(

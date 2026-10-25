@@ -397,12 +397,14 @@ function InsightList({
 
               {typeof item.evidence === "string" && item.evidence.trim() ? (
                 <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-600">
-                  <span className="font-medium text-zinc-700">Evidence:</span>{" "}
-                  {item.evidence}
+                  <span className="font-medium text-zinc-700">
+                    Supporting transcript evidence:
+                  </span>{" "}
+                  <span className="italic">{item.evidence}</span>
                 </p>
               ) : null}
-              </li>
-            ))}
+            </li>
+          ))}
         </ul>
       )}
     </div>
