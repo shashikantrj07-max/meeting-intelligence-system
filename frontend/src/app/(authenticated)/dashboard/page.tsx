@@ -10,7 +10,9 @@ import {
   parseDashboardFilters,
 } from "@/lib/dashboard-meetings";
 import {
+  buildActionItemMeetingHref,
   buildActionItemAccountabilityHref,
+  getActionItemFollowUpReasonLabel,
   parseActionItemAccountabilityFilter,
   parseActionItemsPage,
   type ActionItemAccountabilityFilter,
@@ -128,6 +130,12 @@ async function DashboardContent({
               )}
             >
               View needs attention
+            </Link>
+            <Link
+              className="text-sm font-semibold text-blue-700 underline-offset-2 hover:underline"
+              href={buildActionItemAccountabilityHref(filters, "follow_up")}
+            >
+              View follow-up
             </Link>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -353,6 +361,7 @@ function AccountabilityDrilldown({
     completed: "Completed",
     overdue: "Overdue",
     needs_attention: "Needs attention",
+    follow_up: "Follow-up",
   };
   const items = result.data?.items ?? [];
 
@@ -371,6 +380,7 @@ function AccountabilityDrilldown({
         {(
           [
             "needs_attention",
+            "follow_up",
             "overdue",
             "open",
             "in_progress",
@@ -433,12 +443,16 @@ function AccountabilityDrilldown({
                           ? "Due later"
                           : "No usable due date"}
                       </span>
+                    ) : filter === "follow_up" ? (
+                      <span className="ml-2 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-900">
+                        {getActionItemFollowUpReasonLabel(item.follow_up_reason)}
+                      </span>
                     ) : null}
                   </p>
                 </div>
                 <Link
                   className="shrink-0 text-sm font-medium text-blue-700 underline-offset-2 hover:underline"
-                  href={`/dashboard/meetings/${item.meeting_id}`}
+                  href={buildActionItemMeetingHref(item.meeting_id)}
                 >
                   {item.meeting_title}
                 </Link>

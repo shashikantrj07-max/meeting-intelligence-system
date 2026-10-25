@@ -14,6 +14,7 @@ ActionItemAccountabilityFilter = Literal[
     "completed",
     "overdue",
     "needs_attention",
+    "follow_up",
 ]
 
 
@@ -75,6 +76,14 @@ class ActionItemAccountabilityRecord(BaseModel):
         "no_usable_due_date",
         "completed",
     ]
+    follow_up_reason: Literal[
+        "overdue",
+        "due_today",
+        "due_soon",
+        "high_priority",
+        "missing_due_date",
+        "due_later",
+    ] | None
 
 
 class ActionItemAccountabilityItemsResponse(BaseModel):

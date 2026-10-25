@@ -1,5 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
-import type { ActionItemAccountabilityFilter } from "@/lib/dashboard-accountability";
+import type {
+  ActionItemAccountabilityFilter,
+  ActionItemFollowUpReason,
+} from "@/lib/dashboard-accountability";
 
 export type ActionItemAccountabilitySummary = {
   total: number;
@@ -25,6 +28,7 @@ export type ActionItemAccountabilityRecord = {
     | "due_later"
     | "no_usable_due_date"
     | "completed";
+  follow_up_reason: ActionItemFollowUpReason | null;
 };
 
 export type ActionItemAccountabilityItems = {
@@ -217,7 +221,14 @@ function isActionItemAccountabilityRecord(
       item.attention_reason === "due_soon" ||
       item.attention_reason === "due_later" ||
       item.attention_reason === "no_usable_due_date" ||
-      item.attention_reason === "completed")
+      item.attention_reason === "completed") &&
+    (item.follow_up_reason === null ||
+      item.follow_up_reason === "overdue" ||
+      item.follow_up_reason === "due_today" ||
+      item.follow_up_reason === "due_soon" ||
+      item.follow_up_reason === "high_priority" ||
+      item.follow_up_reason === "missing_due_date" ||
+      item.follow_up_reason === "due_later")
   );
 }
 

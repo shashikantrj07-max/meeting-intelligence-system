@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   buildActionItemAccountabilityHref,
+  buildActionItemMeetingHref,
   buildDashboardFilterHref,
+  getActionItemFollowUpReasonLabel,
   parseActionItemAccountabilityFilter,
   parseActionItemsPage,
 } from "../src/lib/dashboard-accountability.ts";
@@ -18,6 +20,7 @@ test("parses supported accountability filter values and ignores unknown values",
     "completed",
     "overdue",
     "needs_attention",
+    "follow_up",
   ]) {
     assert.equal(parseActionItemAccountabilityFilter(filter), filter);
   }
@@ -70,6 +73,51 @@ test("needs-attention links select the prioritized existing drill-down", () => {
   assert.equal(query.get("q"), "budget");
   assert.equal(query.get("status"), "processing");
   assert.equal(query.get("actionItemStatus"), "needs_attention");
+});
+
+test("follow-up links preserve dashboard filters and pagination", () => {
+  const filters = dashboardFilters("quarterly review", "completed");
+  const href = buildActionItemAccountabilityHref(filters, "follow_up", 3);
+  const query = new URLSearchParams(href.split("?")[1]);
+
+  assert.equal(query.get("q"), "quarterly review");
+  assert.equal(query.get("status"), "completed");
+  assert.equal(query.get("actionItemStatus"), "follow_up");
+  assert.equal(query.get("actionItemsPage"), "3");
+  assert.equal(parseActionItemAccountabilityFilter("unknown"), null);
+});
+
+test("follow-up reasons have readable labels", () => {
+  assert.deepEqual(
+    [
+      "overdue",
+      "due_today",
+      "due_soon",
+      "high_priority",
+      "missing_due_date",
+      "due_later",
+    ].map(getActionItemFollowUpReasonLabel),
+    [
+      "Overdue",
+      "Due today",
+      "Due soon",
+      "High priority",
+      "Missing due date",
+      "Due later",
+    ],
+  );
+  assert.equal(getActionItemFollowUpReasonLabel(null), null);
+});
+
+test("follow-up meeting links retain existing meeting-detail navigation", () => {
+  assert.equal(
+    buildActionItemMeetingHref("meeting-123"),
+    "/dashboard/meetings/meeting-123",
+  );
+  assert.equal(
+    buildActionItemMeetingHref("meeting/id"),
+    "/dashboard/meetings/meeting%2Fid",
+  );
 });
 
 test("meeting search and status changes preserve accountability URL state", () => {

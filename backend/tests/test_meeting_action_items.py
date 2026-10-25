@@ -172,11 +172,35 @@ class FakeRpc:
             else:
                 attention_reason = "no_usable_due_date"
                 urgency_rank = 3
+
+            if item["status"] == "completed":
+                follow_up_reason = None
+                follow_up_rank = 6
+            elif overdue:
+                follow_up_reason = "overdue"
+                follow_up_rank = 0
+            elif parsed_due_date == today:
+                follow_up_reason = "due_today"
+                follow_up_rank = 1
+            elif parsed_due_date is not None and parsed_due_date <= today + timedelta(days=7):
+                follow_up_reason = "due_soon"
+                follow_up_rank = 2
+            elif (item.get("priority") or "").lower() in {"urgent", "high"}:
+                follow_up_reason = "high_priority"
+                follow_up_rank = 3
+            elif parsed_due_date is None:
+                follow_up_reason = "missing_due_date"
+                follow_up_rank = 4
+            else:
+                follow_up_reason = "due_later"
+                follow_up_rank = 5
             if requested_status == "all":
                 matches = True
             elif requested_status == "overdue":
                 matches = overdue
             elif requested_status == "needs_attention":
+                matches = item["status"] != "completed"
+            elif requested_status == "follow_up":
                 matches = item["status"] != "completed"
             else:
                 matches = item["status"] == requested_status
@@ -193,7 +217,9 @@ class FakeRpc:
                         "status": item["status"],
                         "is_overdue": overdue,
                         "attention_reason": attention_reason,
+                        "follow_up_reason": follow_up_reason,
                         "urgency_rank": urgency_rank,
+                        "follow_up_rank": follow_up_rank,
                         "priority_rank": {
                             "urgent": 0,
                             "high": 1,
@@ -205,20 +231,37 @@ class FakeRpc:
                             "in_progress": 1,
                         }.get(item["status"], 2),
                         "created_at": item.get("created_at", "2026-10-25T00:00:00Z"),
+                        "parsed_due_date": parsed_due_date,
                     }
                 )
-        rows.sort(
-            key=lambda row: (
-                row["urgency_rank"],
-                row["due_date"]
-                if row["urgency_rank"] in (0, 1, 2) and row["due_date"]
-                else "",
-                row["priority_rank"],
-                row["status_rank"],
-                row["created_at"],
-                row["id"],
+        if requested_status == "follow_up":
+            rows.sort(
+                key=lambda row: (
+                    row["follow_up_rank"],
+                    row["priority_rank"],
+                    row["status_rank"],
+                    row["parsed_due_date"] or date.max,
+                    -datetime.fromisoformat(
+                        row["created_at"].replace("Z", "+00:00")
+                    ).timestamp(),
+                    row["id"],
+                )
             )
-        )
+        else:
+            rows.sort(
+                key=lambda row: (
+                    row["urgency_rank"],
+                    row["parsed_due_date"]
+                    if row["urgency_rank"] in (0, 1, 2)
+                    else date.max,
+                    row["priority_rank"],
+                    row["status_rank"],
+                    -datetime.fromisoformat(
+                        row["created_at"].replace("Z", "+00:00")
+                    ).timestamp(),
+                    row["id"],
+                )
+            )
         rows = [
             {
                 key: value
@@ -226,9 +269,11 @@ class FakeRpc:
                 if key
                 not in {
                     "urgency_rank",
+                    "follow_up_rank",
                     "priority_rank",
                     "status_rank",
                     "created_at",
+                    "parsed_due_date",
                 }
             }
             for row in rows
@@ -419,12 +464,16 @@ def test_accountability_items_require_auth_and_validate_filters(
     unauthenticated = client.get(
         "/api/meetings/action-items/accountability-items?status=open",
     )
+    unauthenticated_follow_up = client.get(
+        "/api/meetings/action-items/accountability-items?status=follow_up",
+    )
     invalid_filter = client.get(
         "/api/meetings/action-items/accountability-items?status=blocked",
         headers={"Authorization": "Bearer test-token"},
     )
 
     assert unauthenticated.status_code == 401
+    assert unauthenticated_follow_up.status_code == 401
     assert invalid_filter.status_code == 422
     assert supabase.rpc_arguments == []
 
@@ -467,6 +516,7 @@ def test_accountability_filters_match_summary_and_overdue_rules(
         "in_progress": 1,
         "completed": 1,
         "overdue": 2,
+        "follow_up": 7,
     }
     responses = {
         filter_value: client.get(
@@ -542,11 +592,11 @@ def test_accountability_items_are_paginated(
     headers = {"Authorization": "Bearer test-token"}
 
     first = client.get(
-        "/api/meetings/action-items/accountability-items",
+        "/api/meetings/action-items/accountability-items?status=follow_up",
         headers=headers,
     )
     second = client.get(
-        "/api/meetings/action-items/accountability-items?page=2",
+        "/api/meetings/action-items/accountability-items?status=follow_up&page=2",
         headers=headers,
     )
 
@@ -556,6 +606,86 @@ def test_accountability_items_are_paginated(
     assert len(second.json()["items"]) == 2
     assert second.json()["has_more"] is False
     assert second.json()["page"] == 2
+
+
+def test_follow_up_classifies_and_orders_unresolved_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    today = datetime.now(timezone.utc).date()
+    fixtures = [
+        ("overdue-low", "open", (today - timedelta(days=2)).isoformat(), "low"),
+        ("overdue-high", "open", (today - timedelta(days=1)).isoformat(), "high"),
+        ("due-today-low", "open", today.isoformat(), "low"),
+        ("due-soon-later-high", "open", (today + timedelta(days=7)).isoformat(), "high"),
+        ("due-soon-earlier-low", "open", (today + timedelta(days=2)).isoformat(), "low"),
+        ("priority-later-urgent", "open", (today + timedelta(days=12)).isoformat(), "urgent"),
+        ("priority-missing-high", "open", None, "high"),
+        ("missing-malformed-progress", "in_progress", "2026-02-30", "low"),
+        ("missing-freeform-open", "open", "Friday", "low"),
+        ("missing-null-open", "open", None, "low"),
+        ("later-medium", "open", (today + timedelta(days=8)).isoformat(), "medium"),
+        ("completed-overdue", "completed", (today - timedelta(days=1)).isoformat(), "urgent"),
+    ]
+    supabase = FakeSupabase()
+    supabase.action_items = [
+        {
+            "id": f"00000000-0000-0000-0000-{index:012d}",
+            "meeting_id": MEETING_ID,
+            "meeting_title": "Planning",
+            "text": text,
+            "owner": "Sam",
+            "due_date": due_date,
+            "priority": priority,
+            "status": status,
+            "created_at": "2026-10-25T00:00:00Z",
+        }
+        for index, (text, status, due_date, priority) in enumerate(fixtures, start=1)
+    ]
+    client = make_client(monkeypatch, supabase)
+
+    response = client.get(
+        "/api/meetings/action-items/accountability-items",
+        params={"status": "follow_up"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["text"] for item in items] == [
+        "overdue-high",
+        "overdue-low",
+        "due-today-low",
+        "due-soon-later-high",
+        "due-soon-earlier-low",
+        "priority-later-urgent",
+        "priority-missing-high",
+        "missing-freeform-open",
+        "missing-null-open",
+        "missing-malformed-progress",
+        "later-medium",
+    ]
+    assert [item["follow_up_reason"] for item in items] == [
+        "overdue",
+        "overdue",
+        "due_today",
+        "due_soon",
+        "due_soon",
+        "high_priority",
+        "high_priority",
+        "missing_due_date",
+        "missing_due_date",
+        "missing_due_date",
+        "due_later",
+    ]
+    assert all(item["status"] != "completed" for item in items)
+    assert supabase.verified_tokens == ["test-token"]
+    assert supabase.rpc_arguments == [
+        (
+            "get_my_action_item_accountability_items",
+            {"p_status": "follow_up", "p_offset": 0},
+        )
+    ]
+    assert "user_id" not in supabase.rpc_arguments[0][1]
 
 
 def test_needs_attention_is_prioritized_deterministically(

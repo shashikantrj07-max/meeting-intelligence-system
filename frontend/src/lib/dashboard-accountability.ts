@@ -9,7 +9,8 @@ export type ActionItemAccountabilityFilter =
   | "in_progress"
   | "completed"
   | "overdue"
-  | "needs_attention";
+  | "needs_attention"
+  | "follow_up";
 
 const accountabilityFilters: ActionItemAccountabilityFilter[] = [
   "all",
@@ -18,7 +19,25 @@ const accountabilityFilters: ActionItemAccountabilityFilter[] = [
   "completed",
   "overdue",
   "needs_attention",
+  "follow_up",
 ];
+
+export type ActionItemFollowUpReason =
+  | "overdue"
+  | "due_today"
+  | "due_soon"
+  | "high_priority"
+  | "missing_due_date"
+  | "due_later";
+
+const followUpReasonLabels: Record<ActionItemFollowUpReason, string> = {
+  overdue: "Overdue",
+  due_today: "Due today",
+  due_soon: "Due soon",
+  high_priority: "High priority",
+  missing_due_date: "Missing due date",
+  due_later: "Due later",
+};
 
 export function parseActionItemAccountabilityFilter(
   value: string | string[] | undefined,
@@ -27,6 +46,16 @@ export function parseActionItemAccountabilityFilter(
     return null;
   }
   return accountabilityFilters.find((filter) => filter === value) ?? null;
+}
+
+export function getActionItemFollowUpReasonLabel(
+  reason: ActionItemFollowUpReason | null,
+): string | null {
+  return reason === null ? null : followUpReasonLabels[reason];
+}
+
+export function buildActionItemMeetingHref(meetingId: string): string {
+  return `/dashboard/meetings/${encodeURIComponent(meetingId)}`;
 }
 
 export function parseActionItemsPage(
