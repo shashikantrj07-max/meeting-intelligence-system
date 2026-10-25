@@ -1,6 +1,37 @@
 import { connection } from "next/server";
 
+import {
+  buildDashboardMeetings,
+  filterDashboardMeetings,
+  toDashboardTitleSearchPattern,
+  type DashboardFilters,
+} from "@/lib/dashboard-meetings";
 import { createClient } from "@/lib/supabase/server";
+
+export async function getDashboardMeetings(filters: DashboardFilters) {
+  await connection();
+  const supabase = await createClient();
+  const { data: meetings, error } = await supabase
+    .schema("public")
+    .from("meetings")
+    .select(
+      "id, title, description, status, meeting_date, created_at, updated_at, meeting_transcripts(meeting_id, updated_at), meeting_insights(meeting_id, updated_at), meeting_processing(meeting_id, stage, updated_at)",
+    )
+    .ilike("title", toDashboardTitleSearchPattern(filters.search))
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  return {
+    data: filterDashboardMeetings(
+      buildDashboardMeetings(meetings ?? []),
+      filters,
+    ),
+    error: null,
+  };
+}
 
 export async function getMeetingById(id: string) {
   await connection();

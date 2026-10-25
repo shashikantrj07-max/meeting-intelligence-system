@@ -3,27 +3,42 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
-import { createClient } from "@/lib/supabase/server";
+import {
+  formatProcessingStage,
+  getProcessingFailureLabel,
+  isActiveProcessingStage,
+  parseDashboardFilters,
+} from "@/lib/dashboard-meetings";
+import { getDashboardMeetings } from "@/lib/meetings-server";
 import { formatMeetingDate } from "@/lib/meetings";
 
-export default function DashboardPage() {
+type DashboardSearchParams = {
+  q?: string | string[];
+  status?: string | string[];
+};
+
+export default function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<DashboardSearchParams>;
+}) {
   return (
     <Suspense fallback={<DashboardLoading />}>
-      <MeetingsContent />
+      <MeetingsContent searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function MeetingsContent() {
+async function MeetingsContent({
+  searchParams,
+}: {
+  searchParams: Promise<DashboardSearchParams>;
+}) {
   await connection();
-  const supabase = await createClient();
-  const { data: meetings, error } = await supabase
-    .schema("public")
-    .from("meetings")
-    .select(
-      "id, owner_id, title, description, status, meeting_date, duration_seconds, created_at, updated_at",
-    )
-    .order("created_at", { ascending: false });
+  const filters = parseDashboardFilters(await searchParams);
+  const { data: meetings, error } = await getDashboardMeetings(filters);
+  const hasActiveFilters =
+    filters.search.length > 0 || filters.status !== "all";
 
   if (error) {
     if (process.env.NODE_ENV === "development") {
@@ -47,7 +62,70 @@ async function MeetingsContent() {
     <main className="mx-auto w-full max-w-6xl px-6 py-12">
       <PageHeading />
 
-      {meetings.length === 0 ? (
+      <form
+        action="/dashboard"
+        className="mt-8 grid gap-4 rounded-xl border border-zinc-200 bg-white p-5 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
+        method="get"
+      >
+        <div>
+          <label
+            className="block text-sm font-medium text-zinc-800"
+            htmlFor="meeting-search"
+          >
+            Search meeting titles
+          </label>
+          <input
+            autoComplete="off"
+            className="mt-2 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+            id="meeting-search"
+            maxLength={200}
+            name="q"
+            placeholder="Search meetings"
+            type="search"
+            defaultValue={filters.search}
+          />
+        </div>
+        <div>
+          <label
+            className="block text-sm font-medium text-zinc-800"
+            htmlFor="meeting-status-filter"
+          >
+            Status
+          </label>
+          <select
+            className="mt-2 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+            id="meeting-status-filter"
+            name="status"
+            value={filters.status}
+            onChange={(event) => {
+              event.currentTarget.form?.requestSubmit();
+            }}
+          >
+            <option value="all">All</option>
+            <option value="processing">Processing</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+        <div className="flex items-end gap-3">
+          <button
+            className="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800"
+            type="submit"
+          >
+            Search
+          </button>
+          {hasActiveFilters ? (
+            <Link
+              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+              href="/dashboard"
+            >
+              Clear
+            </Link>
+          ) : null}
+        </div>
+      </form>
+
+      {meetings.length === 0 && !hasActiveFilters ? (
         <section className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-14 text-center">
           <h2 className="text-lg font-semibold text-zinc-950">
             No meetings yet
@@ -63,6 +141,21 @@ async function MeetingsContent() {
             New Meeting
           </Link>
         </section>
+      ) : meetings.length === 0 ? (
+        <section className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-14 text-center">
+          <h2 className="text-lg font-semibold text-zinc-950">
+            No matching meetings
+          </h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-zinc-600">
+            Try a different title or status filter.
+          </p>
+          <Link
+            className="mt-5 inline-flex rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
+            href="/dashboard"
+          >
+            Clear search and filters
+          </Link>
+        </section>
       ) : (
         <ul className="mt-8 grid gap-4 md:grid-cols-2">
           {meetings.map((meeting) => (
@@ -72,26 +165,71 @@ async function MeetingsContent() {
                 href={`/dashboard/meetings/${meeting.id}`}
               >
                 <div className="flex items-start justify-between gap-4">
-                  <h2 className="text-lg font-semibold text-zinc-950 group-hover:text-blue-800">
-                    {meeting.title}
-                  </h2>
+                  <div className="min-w-0">
+                    <h2 className="break-words text-lg font-semibold text-zinc-950 group-hover:text-blue-800">
+                      {meeting.title}
+                    </h2>
+                    {meeting.description && (
+                      <p className="mt-3 line-clamp-2 text-sm text-zinc-600">
+                        {meeting.description}
+                      </p>
+                    )}
+                  </div>
                   <MeetingStatusBadge status={meeting.status} />
                 </div>
-                {meeting.description && (
-                  <p className="mt-3 line-clamp-2 text-sm text-zinc-600">
-                    {meeting.description}
-                  </p>
-                )}
-                <dl className="mt-5 grid gap-2 text-xs text-zinc-500">
-                  {meeting.meeting_date && (
-                    <div className="flex gap-1">
-                      <dt>Meeting date:</dt>
-                      <dd>{formatMeetingDate(meeting.meeting_date)}</dd>
-                    </div>
-                  )}
+                <ul className="mt-4 flex flex-wrap gap-2 text-xs">
+                  <li
+                    className={`rounded-full border px-2.5 py-1 ${
+                      meeting.hasTranscript
+                        ? "border-green-200 bg-green-50 text-green-800"
+                        : "border-zinc-200 bg-zinc-50 text-zinc-600"
+                    }`}
+                  >
+                    {meeting.hasTranscript
+                      ? "Transcript available"
+                      : "No transcript"}
+                  </li>
+                  <li
+                    className={`rounded-full border px-2.5 py-1 ${
+                      meeting.hasIntelligence
+                        ? "border-green-200 bg-green-50 text-green-800"
+                        : "border-zinc-200 bg-zinc-50 text-zinc-600"
+                    }`}
+                  >
+                    {meeting.hasIntelligence
+                      ? "Intelligence available"
+                      : "No intelligence"}
+                  </li>
+                  {meeting.processingStage &&
+                  isActiveProcessingStage(meeting.processingStage) ? (
+                    <li className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-blue-800">
+                      Processing: {formatProcessingStage(meeting.processingStage)}
+                    </li>
+                  ) : null}
+                  {getProcessingFailureLabel(
+                    meeting.processingStage,
+                    meeting.hasTranscript,
+                  ) ? (
+                    <li className="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-red-800">
+                      {getProcessingFailureLabel(
+                        meeting.processingStage,
+                        meeting.hasTranscript,
+                      )}
+                    </li>
+                  ) : null}
+                </ul>
+                <dl className="mt-4 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
                   <div className="flex gap-1">
-                    <dt>Created:</dt>
-                    <dd>{formatMeetingDate(meeting.created_at)}</dd>
+                    <dt>Meeting date:</dt>
+                    <dd>
+                      {meeting.meeting_date
+                        ? formatMeetingDate(meeting.meeting_date)
+                        : "Not set"}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt>Last updated:</dt>
+                    <dd>{formatMeetingDate(meeting.lastUpdated)}</dd>
                   </div>
                 </dl>
               </Link>
