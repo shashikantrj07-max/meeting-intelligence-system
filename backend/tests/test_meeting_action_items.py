@@ -143,15 +143,41 @@ class FakeRpc:
         offset = self.params["p_offset"]
         rows = []
         for item in self.client.action_items:
+            parsed_due_date = None
+            due_date = item.get("due_date")
+            if isinstance(due_date, str):
+                try:
+                    parsed_due_date = date.fromisoformat(due_date)
+                    if parsed_due_date.isoformat() != due_date:
+                        parsed_due_date = None
+                except ValueError:
+                    parsed_due_date = None
             overdue = is_action_item_overdue(
-                item.get("due_date"),
+                due_date,
                 item["status"],
                 today=today,
             )
+            if item["status"] == "completed":
+                attention_reason = "completed"
+                urgency_rank = 4
+            elif overdue:
+                attention_reason = "overdue"
+                urgency_rank = 0
+            elif parsed_due_date is not None and parsed_due_date <= today + timedelta(days=7):
+                attention_reason = "due_soon"
+                urgency_rank = 1
+            elif parsed_due_date is not None:
+                attention_reason = "due_later"
+                urgency_rank = 2
+            else:
+                attention_reason = "no_usable_due_date"
+                urgency_rank = 3
             if requested_status == "all":
                 matches = True
             elif requested_status == "overdue":
                 matches = overdue
+            elif requested_status == "needs_attention":
+                matches = item["status"] != "completed"
             else:
                 matches = item["status"] == requested_status
             if matches:
@@ -162,12 +188,51 @@ class FakeRpc:
                         "meeting_title": item["meeting_title"],
                         "text": item["text"],
                         "owner": item.get("owner"),
-                        "due_date": item.get("due_date"),
+                        "due_date": due_date,
+                        "priority": item.get("priority"),
                         "status": item["status"],
                         "is_overdue": overdue,
+                        "attention_reason": attention_reason,
+                        "urgency_rank": urgency_rank,
+                        "priority_rank": {
+                            "urgent": 0,
+                            "high": 1,
+                            "medium": 2,
+                            "low": 3,
+                        }.get((item.get("priority") or "").lower(), 4),
+                        "status_rank": {
+                            "open": 0,
+                            "in_progress": 1,
+                        }.get(item["status"], 2),
+                        "created_at": item.get("created_at", "2026-10-25T00:00:00Z"),
                     }
                 )
-        rows.sort(key=lambda row: (row["due_date"] is None, row["due_date"] or ""))
+        rows.sort(
+            key=lambda row: (
+                row["urgency_rank"],
+                row["due_date"]
+                if row["urgency_rank"] in (0, 1, 2) and row["due_date"]
+                else "",
+                row["priority_rank"],
+                row["status_rank"],
+                row["created_at"],
+                row["id"],
+            )
+        )
+        rows = [
+            {
+                key: value
+                for key, value in row.items()
+                if key
+                not in {
+                    "urgency_rank",
+                    "priority_rank",
+                    "status_rank",
+                    "created_at",
+                }
+            }
+            for row in rows
+        ]
         return SimpleNamespace(data=rows[offset : offset + 26])
 
 
@@ -491,6 +556,75 @@ def test_accountability_items_are_paginated(
     assert len(second.json()["items"]) == 2
     assert second.json()["has_more"] is False
     assert second.json()["page"] == 2
+
+
+def test_needs_attention_is_prioritized_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    today = datetime.now(timezone.utc).date()
+    fixtures = [
+        ("overdue-older", "open", (today - timedelta(days=2)).isoformat(), "low"),
+        ("overdue-urgent", "in_progress", (today - timedelta(days=1)).isoformat(), "urgent"),
+        ("due-today-low", "open", today.isoformat(), "low"),
+        ("due-today-high", "open", today.isoformat(), "high"),
+        ("due-seven", "open", (today + timedelta(days=7)).isoformat(), "medium"),
+        ("due-eight", "open", (today + timedelta(days=8)).isoformat(), "urgent"),
+        ("invalid-open", "open", "2026-02-30", None),
+        ("missing-open", "open", None, None),
+        ("missing-progress", "in_progress", None, None),
+        ("completed-overdue", "completed", (today - timedelta(days=3)).isoformat(), "urgent"),
+    ]
+    supabase = FakeSupabase()
+    supabase.action_items = [
+        {
+            "id": f"00000000-0000-0000-0000-{index:012d}",
+            "meeting_id": MEETING_ID,
+            "meeting_title": "Planning",
+            "text": text,
+            "owner": None,
+            "due_date": due_date,
+            "priority": priority,
+            "status": status,
+            "created_at": "2026-10-25T00:00:00Z",
+        }
+        for index, (text, status, due_date, priority) in enumerate(fixtures, start=1)
+    ]
+    client = make_client(monkeypatch, supabase)
+
+    response = client.get(
+        "/api/meetings/action-items/accountability-items",
+        params={"status": "needs_attention"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["text"] for item in items] == [
+        "overdue-older",
+        "overdue-urgent",
+        "due-today-high",
+        "due-today-low",
+        "due-seven",
+        "due-eight",
+        "invalid-open",
+        "missing-open",
+        "missing-progress",
+    ]
+    assert [item["attention_reason"] for item in items] == [
+        "overdue",
+        "overdue",
+        "due_soon",
+        "due_soon",
+        "due_soon",
+        "due_later",
+        "no_usable_due_date",
+        "no_usable_due_date",
+        "no_usable_due_date",
+    ]
+    assert all(item["status"] != "completed" for item in items)
+    assert items[0]["priority"] == "low"
+    assert items[1]["priority"] == "urgent"
+    assert items[2]["priority"] == "high"
 
 
 def test_action_item_status_update_is_scoped_to_meeting(

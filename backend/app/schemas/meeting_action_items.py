@@ -13,6 +13,7 @@ ActionItemAccountabilityFilter = Literal[
     "in_progress",
     "completed",
     "overdue",
+    "needs_attention",
 ]
 
 
@@ -64,8 +65,16 @@ class ActionItemAccountabilityRecord(BaseModel):
     text: str = Field(min_length=1)
     owner: str | None = None
     due_date: str | None = None
+    priority: str | None = None
     status: ActionItemStatus
     is_overdue: bool
+    attention_reason: Literal[
+        "overdue",
+        "due_soon",
+        "due_later",
+        "no_usable_due_date",
+        "completed",
+    ]
 
 
 class ActionItemAccountabilityItemsResponse(BaseModel):

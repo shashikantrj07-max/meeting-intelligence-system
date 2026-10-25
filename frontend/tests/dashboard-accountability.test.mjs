@@ -17,6 +17,7 @@ test("parses supported accountability filter values and ignores unknown values",
     "in_progress",
     "completed",
     "overdue",
+    "needs_attention",
   ]) {
     assert.equal(parseActionItemAccountabilityFilter(filter), filter);
   }
@@ -56,6 +57,19 @@ test("pagination links retain the selected filter and dashboard parameters", () 
   assert.equal(query.get("status"), "failed");
   assert.equal(query.get("actionItemStatus"), "overdue");
   assert.equal(query.get("actionItemsPage"), "2");
+});
+
+test("needs-attention links select the prioritized existing drill-down", () => {
+  const filters = dashboardFilters("budget", "processing");
+  const href = buildActionItemAccountabilityHref(
+    filters,
+    "needs_attention",
+  );
+  const query = new URLSearchParams(href.split("?")[1]);
+
+  assert.equal(query.get("q"), "budget");
+  assert.equal(query.get("status"), "processing");
+  assert.equal(query.get("actionItemStatus"), "needs_attention");
 });
 
 test("meeting search and status changes preserve accountability URL state", () => {

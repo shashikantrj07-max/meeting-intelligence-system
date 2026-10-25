@@ -8,7 +8,8 @@ export type ActionItemAccountabilityFilter =
   | "open"
   | "in_progress"
   | "completed"
-  | "overdue";
+  | "overdue"
+  | "needs_attention";
 
 const accountabilityFilters: ActionItemAccountabilityFilter[] = [
   "all",
@@ -16,6 +17,7 @@ const accountabilityFilters: ActionItemAccountabilityFilter[] = [
   "in_progress",
   "completed",
   "overdue",
+  "needs_attention",
 ];
 
 export function parseActionItemAccountabilityFilter(

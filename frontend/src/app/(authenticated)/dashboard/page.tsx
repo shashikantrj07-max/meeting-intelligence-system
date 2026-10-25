@@ -116,9 +116,20 @@ async function DashboardContent({
           aria-label="Action-item accountability"
           className="mt-8"
         >
-          <h2 className="text-lg font-semibold text-zinc-950">
-            Action-item accountability
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-zinc-950">
+              Action-item accountability
+            </h2>
+            <Link
+              className="text-sm font-semibold text-blue-700 underline-offset-2 hover:underline"
+              href={buildActionItemAccountabilityHref(
+                filters,
+                "needs_attention",
+              )}
+            >
+              View needs attention
+            </Link>
+          </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <AccountabilityCard
               label="Tracked"
@@ -341,6 +352,7 @@ function AccountabilityDrilldown({
     in_progress: "In Progress",
     completed: "Completed",
     overdue: "Overdue",
+    needs_attention: "Needs attention",
   };
   const items = result.data?.items ?? [];
 
@@ -352,6 +364,34 @@ function AccountabilityDrilldown({
       <h2 className="text-lg font-semibold text-zinc-950">
         {filterLabels[filter]} action items
       </h2>
+      <nav
+        aria-label="Filter accountability items"
+        className="mt-3 flex flex-wrap gap-2"
+      >
+        {(
+          [
+            "needs_attention",
+            "overdue",
+            "open",
+            "in_progress",
+            "completed",
+            "all",
+          ] as const
+        ).map((option) => (
+          <Link
+            aria-current={filter === option ? "page" : undefined}
+            className={`rounded-full border px-3 py-1 text-xs font-medium ${
+              filter === option
+                ? "border-blue-700 bg-blue-50 text-blue-900"
+                : "border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+            }`}
+            href={buildActionItemAccountabilityHref(filters, option)}
+            key={option}
+          >
+            {filterLabels[option]}
+          </Link>
+        ))}
+      </nav>
       {result.error ? (
         <p className="mt-3 text-sm text-red-800" role="alert">
           Action items could not be loaded. Refresh the page to retry.
@@ -373,11 +413,25 @@ function AccountabilityDrilldown({
                     {item.text}
                   </p>
                   <p className="mt-1 text-xs text-zinc-600">
-                    {item.owner ? `Owner: ${item.owner} · ` : ""}
-                    {item.due_date ? `Due: ${item.due_date}` : "No due date"}
+                    <span className="font-medium text-zinc-800">
+                      {item.status.replace("_", " ")}
+                    </span>
+                    {item.owner ? ` · Owner: ${item.owner}` : ""}
+                    {item.due_date ? ` · Due: ${item.due_date}` : " · No due date"}
+                    {item.priority ? ` · Priority: ${item.priority}` : ""}
                     {item.is_overdue ? (
                       <span className="ml-2 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-800">
                         Overdue
+                      </span>
+                    ) : item.attention_reason === "due_soon" ? (
+                      <span className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-semibold text-amber-900">
+                        Due soon
+                      </span>
+                    ) : filter === "needs_attention" ? (
+                      <span className="ml-2 text-zinc-500">
+                        {item.attention_reason === "due_later"
+                          ? "Due later"
+                          : "No usable due date"}
                       </span>
                     ) : null}
                   </p>

@@ -16,8 +16,15 @@ export type ActionItemAccountabilityRecord = {
   text: string;
   owner: string | null;
   due_date: string | null;
+  priority: string | null;
   status: "open" | "in_progress" | "completed";
   is_overdue: boolean;
+  attention_reason:
+    | "overdue"
+    | "due_soon"
+    | "due_later"
+    | "no_usable_due_date"
+    | "completed";
 };
 
 export type ActionItemAccountabilityItems = {
@@ -201,10 +208,16 @@ function isActionItemAccountabilityRecord(
     typeof item.text === "string" &&
     (typeof item.owner === "string" || item.owner === null) &&
     (typeof item.due_date === "string" || item.due_date === null) &&
+    (typeof item.priority === "string" || item.priority === null) &&
     (item.status === "open" ||
       item.status === "in_progress" ||
       item.status === "completed") &&
-    typeof item.is_overdue === "boolean"
+    typeof item.is_overdue === "boolean" &&
+    (item.attention_reason === "overdue" ||
+      item.attention_reason === "due_soon" ||
+      item.attention_reason === "due_later" ||
+      item.attention_reason === "no_usable_due_date" ||
+      item.attention_reason === "completed")
   );
 }
 
