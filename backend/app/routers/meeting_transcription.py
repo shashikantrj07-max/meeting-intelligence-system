@@ -15,6 +15,7 @@ from app.config import settings
 from app.services.ai.gemini import GeminiMeetingInsightsProvider
 from app.schemas.meeting_insights import MeetingInsights
 from app.services.supabase import create_request_supabase_client
+from app.services.meeting_action_items import sync_generated_action_items
 from app.services.transcription.whisper import WhisperTranscriptionService
 
 
@@ -406,6 +407,12 @@ def _generate_and_save_insights(
             )
             .single()
             .execute()
+        )
+
+        sync_generated_action_items(
+            supabase,
+            meeting_id,
+            insights.action_items,
         )
 
     except Exception as exc:

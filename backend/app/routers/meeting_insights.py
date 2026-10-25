@@ -7,6 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
 from app.schemas.meeting_insights import MeetingInsights
 from app.services.ai.gemini import GeminiMeetingInsightsProvider
+from app.services.meeting_action_items import sync_generated_action_items
 from app.services.supabase import create_request_supabase_client
 
 router = APIRouter(prefix="/api/meetings", tags=["meeting insights"])
@@ -228,6 +229,22 @@ def _generate_and_save_insights(
             meeting_id,
             started_at,
             "Meeting intelligence could not be saved.",
+        )
+        return
+
+    try:
+        sync_generated_action_items(
+            supabase,
+            meeting_id,
+            insights.action_items,
+        )
+    except Exception as exc:
+        logger.error("Meeting action-item sync failed (%s).", type(exc).__name__)
+        _mark_processing_failed(
+            supabase,
+            meeting_id,
+            started_at,
+            "Meeting action items could not be synchronized.",
         )
         return
 

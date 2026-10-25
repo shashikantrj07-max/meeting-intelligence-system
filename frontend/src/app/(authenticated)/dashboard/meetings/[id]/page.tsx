@@ -6,9 +6,11 @@ import { DeleteTranscriptButton } from "@/components/meetings/delete-transcript-
 import { MeetingFileDeleteButton } from "@/components/meetings/meeting-file-delete-button";
 import { MeetingFileTranscribeButton } from "@/components/meetings/meeting-file-transcribe-button";
 import { MeetingFileUpload } from "@/components/meetings/meeting-file-upload";
+import { MeetingActionItems } from "@/components/meetings/meeting-action-items";
 import { MeetingProcessingControls } from "@/components/meetings/meeting-processing-controls";
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
 import { formatMeetingDate } from "@/lib/meetings";
+import { parseGeneratedActionItems } from "@/lib/meeting-action-items-shared";
 import {
   getMeetingById,
   getMeetingFilesByMeetingId,
@@ -252,7 +254,10 @@ async function MeetingDetailContent({
               title="Key Decisions"
               value={insights.key_decisions}
             />
-            <InsightList title="Action Items" value={insights.action_items} />
+            <MeetingActionItems
+              items={parseGeneratedActionItems(insights.action_items)}
+              meetingId={meeting.id}
+            />
             <InsightList
               title="Risks & Blockers"
               value={insights.risks_blockers}

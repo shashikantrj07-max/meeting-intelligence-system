@@ -13,6 +13,7 @@ export type MeetingProcessingStage =
   | "analyzing"
   | "completed"
   | "failed";
+export type MeetingActionItemStatus = "open" | "in_progress" | "completed";
 
 type Relationship = {
   foreignKeyName: string;
@@ -290,6 +291,56 @@ export type Database = {
             foreignKeyName: "meeting_insights_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: true;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          },
+        ]
+      >;
+      meeting_action_items: Table<
+        {
+          id: string;
+          meeting_id: string;
+          identity_key: string;
+          text: string;
+          owner: string | null;
+          due_date: string | null;
+          priority: string | null;
+          evidence: string | null;
+          status: MeetingActionItemStatus;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          meeting_id: string;
+          identity_key: string;
+          text: string;
+          owner?: string | null;
+          due_date?: string | null;
+          priority?: string | null;
+          evidence?: string | null;
+          status?: MeetingActionItemStatus;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          meeting_id?: string;
+          identity_key?: string;
+          text?: string;
+          owner?: string | null;
+          due_date?: string | null;
+          priority?: string | null;
+          evidence?: string | null;
+          status?: MeetingActionItemStatus;
+          created_at?: string;
+          updated_at?: string;
+        },
+        [
+          {
+            foreignKeyName: "meeting_action_items_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
             referencedRelation: "meetings";
             referencedColumns: ["id"];
           },

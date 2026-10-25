@@ -1,8 +1,8 @@
 import { Suspense } from "react";
 import Link from "next/link";
-import { connection } from "next/server";
 
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
+import { DashboardMeetingFilters } from "@/components/meetings/dashboard-meeting-filters";
 import {
   formatProcessingStage,
   getProcessingFailureLabel,
@@ -24,17 +24,16 @@ export default function DashboardPage({
 }) {
   return (
     <Suspense fallback={<DashboardLoading />}>
-      <MeetingsContent searchParams={searchParams} />
+      <DashboardContent searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function MeetingsContent({
+async function DashboardContent({
   searchParams,
 }: {
   searchParams: Promise<DashboardSearchParams>;
 }) {
-  await connection();
   const filters = parseDashboardFilters(await searchParams);
   const { data: meetings, error } = await getDashboardMeetings(filters);
   const hasActiveFilters =
@@ -62,68 +61,10 @@ async function MeetingsContent({
     <main className="mx-auto w-full max-w-6xl px-6 py-12">
       <PageHeading />
 
-      <form
-        action="/dashboard"
-        className="mt-8 grid gap-4 rounded-xl border border-zinc-200 bg-white p-5 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
-        method="get"
-      >
-        <div>
-          <label
-            className="block text-sm font-medium text-zinc-800"
-            htmlFor="meeting-search"
-          >
-            Search meeting titles
-          </label>
-          <input
-            autoComplete="off"
-            className="mt-2 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
-            id="meeting-search"
-            maxLength={200}
-            name="q"
-            placeholder="Search meetings"
-            type="search"
-            defaultValue={filters.search}
-          />
-        </div>
-        <div>
-          <label
-            className="block text-sm font-medium text-zinc-800"
-            htmlFor="meeting-status-filter"
-          >
-            Status
-          </label>
-          <select
-            className="mt-2 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
-            id="meeting-status-filter"
-            name="status"
-            value={filters.status}
-            onChange={(event) => {
-              event.currentTarget.form?.requestSubmit();
-            }}
-          >
-            <option value="all">All</option>
-            <option value="processing">Processing</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-          </select>
-        </div>
-        <div className="flex items-end gap-3">
-          <button
-            className="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800"
-            type="submit"
-          >
-            Search
-          </button>
-          {hasActiveFilters ? (
-            <Link
-              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
-              href="/dashboard"
-            >
-              Clear
-            </Link>
-          ) : null}
-        </div>
-      </form>
+      <DashboardMeetingFilters
+        filters={filters}
+        hasActiveFilters={hasActiveFilters}
+      />
 
       {meetings.length === 0 && !hasActiveFilters ? (
         <section className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-14 text-center">

@@ -184,7 +184,7 @@ class _FakeSupabaseQuery:
 
     def upsert(
         self,
-        payload: dict[str, object],
+        payload: dict[str, object] | list[dict[str, object]],
         *,
         on_conflict: str,
     ) -> "_FakeSupabaseQuery":
@@ -206,7 +206,13 @@ class _FakeSupabaseQuery:
 
 class _FakeSupabase:
     def __init__(self) -> None:
-        self.upserts: list[tuple[str, dict[str, object], str]] = []
+        self.upserts: list[
+            tuple[
+                str,
+                dict[str, object] | list[dict[str, object]],
+                str,
+            ]
+        ] = []
 
     def schema(self, _schema: str) -> "_FakeSupabase":
         return self
@@ -275,11 +281,29 @@ class InsightPersistenceTests(unittest.TestCase):
                     "2026-10-25T00:00:00Z",
                 )
 
-            self.assertEqual(len(supabase.upserts), 1)
-            table, payload, conflict = supabase.upserts[0]
+            insight_upserts = [
+                entry for entry in supabase.upserts if entry[0] == "meeting_insights"
+            ]
+            action_item_upserts = [
+                entry
+                for entry in supabase.upserts
+                if entry[0] == "meeting_action_items"
+            ]
+            self.assertEqual(len(insight_upserts), 1)
+            self.assertEqual(len(action_item_upserts), 1)
+            table, payload, conflict = insight_upserts[0]
             self.assertEqual(table, "meeting_insights")
             self.assertEqual(conflict, "meeting_id")
             self.assertEqual(payload, expected_payload)
+            action_table, action_records, action_conflict = action_item_upserts[0]
+            self.assertEqual(action_table, "meeting_action_items")
+            self.assertEqual(action_conflict, "meeting_id,identity_key")
+            self.assertEqual(len(action_records), 1)
+            self.assertEqual(action_records[0]["text"], "Send the plan.")
+            self.assertEqual(
+                action_records[0]["evidence"],
+                "Morgan will send the plan Friday.",
+            )
             persisted_payloads.append(payload)
 
         self.assertEqual(persisted_payloads[0], persisted_payloads[1])
