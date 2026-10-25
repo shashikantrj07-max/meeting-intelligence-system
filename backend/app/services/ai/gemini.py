@@ -16,6 +16,22 @@ logger = logging.getLogger(__name__)
 GEMINI_REQUEST_TIMEOUT_MS = 120_000
 
 
+def _gemini_response_schema() -> dict[str, object]:
+    schema = MeetingInsights.model_json_schema()
+    _remove_additional_properties(schema)
+    return schema
+
+
+def _remove_additional_properties(value: object) -> None:
+    if isinstance(value, dict):
+        value.pop("additionalProperties", None)
+        for nested_value in value.values():
+            _remove_additional_properties(nested_value)
+    elif isinstance(value, list):
+        for nested_value in value:
+            _remove_additional_properties(nested_value)
+
+
 class GeminiMeetingInsightsProvider:
     """Gemini-backed provider for structured meeting intelligence."""
 
@@ -65,12 +81,18 @@ class GeminiMeetingInsightsProvider:
             "transcript only.\n\n"
             "Use only information explicitly present in the transcript. "
             "Never invent decisions, action items, owners, dates, deadlines, "
-            "risks, blockers, or other facts.\n\n"
+            "risks, blockers, questions, or next steps.\n\n"
             "Return empty arrays when there is no evidence.\n\n"
             "Produce a concise but useful summary.\n"
             "Extract concrete decisions.\n"
             "Extract concrete action items.\n"
-            "Identify risks or blockers only when supported by the transcript."
+            "Identify risks or blockers only when supported by the transcript.\n"
+            "Extract discussion points as substantive topics or issues "
+            "discussed in the meeting.\n"
+            "Extract open questions as questions or issues that remain "
+            "unresolved according to the transcript.\n"
+            "Extract next steps as concrete follow-up activities supported "
+            "by the transcript."
             "\n\n"
             f"Transcript:\n{transcript}"
         )
@@ -86,7 +108,7 @@ class GeminiMeetingInsightsProvider:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=MeetingInsights,
+                    response_schema=_gemini_response_schema(),
                 ),
             )
 

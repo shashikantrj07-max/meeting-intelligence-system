@@ -253,6 +253,9 @@ export type Database = {
           key_decisions: Json;
           action_items: Json;
           risks_blockers: Json;
+          discussion_points: Json;
+          open_questions: Json;
+          next_steps: Json;
           created_at: string;
           updated_at: string;
         },
@@ -263,6 +266,9 @@ export type Database = {
           key_decisions?: Json;
           action_items?: Json;
           risks_blockers?: Json;
+          discussion_points?: Json;
+          open_questions?: Json;
+          next_steps?: Json;
           created_at?: string;
           updated_at?: string;
         },
@@ -273,6 +279,9 @@ export type Database = {
           key_decisions?: Json;
           action_items?: Json;
           risks_blockers?: Json;
+          discussion_points?: Json;
+          open_questions?: Json;
+          next_steps?: Json;
           created_at?: string;
           updated_at?: string;
         },

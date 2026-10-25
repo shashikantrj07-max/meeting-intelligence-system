@@ -188,6 +188,9 @@ def _generate_and_save_insights(
         "summary": insight_data["summary"],
         "key_decisions": insight_data["key_decisions"],
         "action_items": insight_data["action_items"],
+        "discussion_points": insight_data["discussion_points"],
+        "open_questions": insight_data["open_questions"],
+        "next_steps": insight_data["next_steps"],
         "risks_blockers": insight_data["risks_blockers"],
     }
 
@@ -202,6 +205,7 @@ def _generate_and_save_insights(
             .upsert(payload, on_conflict="meeting_id")
             .select(
                 "id, meeting_id, summary, key_decisions, action_items, "
+                "discussion_points, open_questions, next_steps, "
                 "risks_blockers, created_at, updated_at"
             )
             .single()

@@ -211,7 +211,7 @@ async function MeetingDetailContent({
               </p>
             ) : null}
             <p className="mt-1 text-sm text-zinc-600">
-              Generate a summary, decisions, action items, and risks from the transcript.
+              Generate a summary and structured meeting details from the transcript.
             </p>
           </div>
 
@@ -257,6 +257,15 @@ async function MeetingDetailContent({
               title="Risks & Blockers"
               value={insights.risks_blockers}
             />
+            <InsightList
+              title="Discussion Points"
+              value={insights.discussion_points}
+            />
+            <InsightList
+              title="Open Questions"
+              value={insights.open_questions}
+            />
+            <InsightList title="Next Steps" value={insights.next_steps} />
           </div>
         ) : (
           <p className="mt-5 rounded-md border border-dashed border-zinc-300 bg-zinc-50 p-5 text-sm text-zinc-600">
@@ -346,7 +355,7 @@ function InsightList({
   title: string;
   value: Json;
 }) {
-  const items = Array.isArray(value) ? value : [];
+  const items = Array.isArray(value) ? value.filter(isInsightItem) : [];
 
   return (
     <div>
@@ -361,47 +370,55 @@ function InsightList({
               className="rounded-lg border border-zinc-200 bg-zinc-50 p-4"
               key={index}
             >
-              {typeof item === "object" &&
-                item !== null &&
-                "text" in item &&
-                typeof item.text === "string" ? (
-                <>
-                  <p className="whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
-                    {item.text}
-                  </p>
+              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
+                {item.text}
+              </p>
 
-                  {"owner" in item &&
-                    typeof item.owner === "string" &&
-                    item.owner.trim() && (
-                      <p className="mt-2 text-xs text-zinc-600">
-                        <span className="font-medium text-zinc-700">
-                          Owner:
-                        </span>{" "}
-                        {item.owner}
-                      </p>
-                    )}
-
-                  {"due_date" in item &&
-                    typeof item.due_date === "string" &&
-                    item.due_date.trim() && (
-                      <p className="mt-1 text-xs text-zinc-600">
-                        <span className="font-medium text-zinc-700">
-                          Due:
-                        </span>{" "}
-                        {item.due_date}
-                      </p>
-                    )}
-                </>
-              ) : (
-                <p className="text-sm text-zinc-600">
-                  No readable text is available.
+              {typeof item.owner === "string" && item.owner.trim() ? (
+                <p className="mt-2 text-xs text-zinc-600">
+                  <span className="font-medium text-zinc-700">Owner:</span>{" "}
+                  {item.owner}
                 </p>
-              )}
-            </li>
-          ))}
+              ) : null}
+
+              {typeof item.due_date === "string" && item.due_date.trim() ? (
+                <p className="mt-1 text-xs text-zinc-600">
+                  <span className="font-medium text-zinc-700">Due:</span>{" "}
+                  {item.due_date}
+                </p>
+              ) : null}
+
+              {typeof item.priority === "string" && item.priority.trim() ? (
+                <p className="mt-1 text-xs text-zinc-600">
+                  <span className="font-medium text-zinc-700">Priority:</span>{" "}
+                  {item.priority}
+                </p>
+              ) : null}
+
+              {typeof item.evidence === "string" && item.evidence.trim() ? (
+                <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-600">
+                  <span className="font-medium text-zinc-700">Evidence:</span>{" "}
+                  {item.evidence}
+                </p>
+              ) : null}
+              </li>
+            ))}
         </ul>
       )}
     </div>
+  );
+}
+
+function isInsightItem(
+  value: Json,
+): value is { text: string; [key: string]: Json | undefined } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "text" in value &&
+    typeof value.text === "string" &&
+    value.text.trim().length > 0
   );
 }
 
