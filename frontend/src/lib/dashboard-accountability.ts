@@ -10,7 +10,24 @@ export type ActionItemAccountabilityFilter =
   | "completed"
   | "overdue"
   | "needs_attention"
-  | "follow_up";
+  | "follow_up"
+  | "needs_review"
+  | ActionItemAccountabilitySignal;
+
+export type ActionItemReviewStateFilter =
+  | "all"
+  | "reviewable"
+  | "reviewed"
+  | "needs_review"
+  | "reopened_since_review";
+
+const reviewStateFilters: ActionItemReviewStateFilter[] = [
+  "all",
+  "reviewable",
+  "reviewed",
+  "needs_review",
+  "reopened_since_review",
+];
 
 const accountabilityFilters: ActionItemAccountabilityFilter[] = [
   "all",
@@ -20,6 +37,34 @@ const accountabilityFilters: ActionItemAccountabilityFilter[] = [
   "overdue",
   "needs_attention",
   "follow_up",
+  "needs_review",
+  "reopened",
+  "repeated_updates",
+  "stale",
+  "recent_activity",
+];
+
+export type ActionItemAccountabilitySignal =
+  | "reopened"
+  | "repeated_updates"
+  | "stale"
+  | "recent_activity";
+
+const accountabilitySignalLabels: Record<
+  ActionItemAccountabilitySignal,
+  string
+> = {
+  reopened: "Reopened",
+  repeated_updates: "Repeated updates",
+  stale: "Stale",
+  recent_activity: "Recent activity",
+};
+
+const accountabilitySignals: ActionItemAccountabilitySignal[] = [
+  "reopened",
+  "repeated_updates",
+  "stale",
+  "recent_activity",
 ];
 
 export type ActionItemFollowUpReason =
@@ -48,10 +93,34 @@ export function parseActionItemAccountabilityFilter(
   return accountabilityFilters.find((filter) => filter === value) ?? null;
 }
 
+export function parseActionItemReviewStateFilter(
+  value: string | string[] | undefined,
+): ActionItemReviewStateFilter | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return reviewStateFilters.find((filter) => filter === value) ?? null;
+}
+
 export function getActionItemFollowUpReasonLabel(
   reason: ActionItemFollowUpReason | null,
 ): string | null {
   return reason === null ? null : followUpReasonLabels[reason];
+}
+
+export function parseActionItemAccountabilitySignal(
+  value: unknown,
+): ActionItemAccountabilitySignal | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return accountabilitySignals.find((signal) => signal === value) ?? null;
+}
+
+export function getActionItemAccountabilitySignalLabel(
+  signal: ActionItemAccountabilitySignal,
+): string {
+  return accountabilitySignalLabels[signal];
 }
 
 export function buildActionItemMeetingHref(meetingId: string): string {
@@ -75,6 +144,7 @@ export function buildActionItemAccountabilityHref(
   filters: DashboardFilters,
   accountabilityFilter: ActionItemAccountabilityFilter,
   page = 1,
+  reviewState?: ActionItemReviewStateFilter | null,
 ): string {
   const query = new URLSearchParams();
   if (filters.search) {
@@ -84,10 +154,40 @@ export function buildActionItemAccountabilityHref(
     query.set("status", filters.status);
   }
   query.set("actionItemStatus", accountabilityFilter);
+  if (reviewState) {
+    query.set("actionItemReviewState", reviewState);
+  }
   if (page > 1) {
     query.set("actionItemsPage", String(page));
   }
   return `/dashboard?${query.toString()}`;
+}
+
+export function getActionItemReviewStateForMetric(
+  metric:
+    | "total_reviewable"
+    | "reviewed"
+    | "needs_review"
+    | "reopened_since_review",
+): ActionItemReviewStateFilter {
+  return metric === "total_reviewable" ? "reviewable" : metric;
+}
+
+export function isActionItemReviewMetricSelected(
+  metric:
+    | "total_reviewable"
+    | "reviewed"
+    | "needs_review"
+    | "reopened_since_review"
+    | "review_coverage_percent",
+  selectedState: ActionItemReviewStateFilter | null,
+): boolean {
+  return (
+    metric !== "review_coverage_percent" &&
+    (metric === "total_reviewable"
+      ? selectedState === "reviewable"
+      : getActionItemReviewStateForMetric(metric) === selectedState)
+  );
 }
 
 export function buildDashboardFilterHref(

@@ -6,7 +6,12 @@ import {
   buildActionItemMeetingHref,
   buildDashboardFilterHref,
   getActionItemFollowUpReasonLabel,
+  getActionItemAccountabilitySignalLabel,
+  getActionItemReviewStateForMetric,
+  isActionItemReviewMetricSelected,
+  parseActionItemAccountabilitySignal,
   parseActionItemAccountabilityFilter,
+  parseActionItemReviewStateFilter,
   parseActionItemsPage,
 } from "../src/lib/dashboard-accountability.ts";
 
@@ -21,12 +26,56 @@ test("parses supported accountability filter values and ignores unknown values",
     "overdue",
     "needs_attention",
     "follow_up",
+    "needs_review",
+    "reopened",
+    "repeated_updates",
+    "stale",
+    "recent_activity",
   ]) {
     assert.equal(parseActionItemAccountabilityFilter(filter), filter);
   }
   assert.equal(parseActionItemAccountabilityFilter("blocked"), null);
   assert.equal(parseActionItemAccountabilityFilter(["open", "completed"]), null);
   assert.equal(parseActionItemAccountabilityFilter(undefined), null);
+  for (const filter of [
+    "all",
+    "reviewable",
+    "reviewed",
+    "needs_review",
+    "reopened_since_review",
+  ]) {
+    assert.equal(parseActionItemReviewStateFilter(filter), filter);
+  }
+  assert.equal(parseActionItemReviewStateFilter("stale"), null);
+  assert.equal(parseActionItemAccountabilitySignal("reopened"), "reopened");
+  assert.equal(parseActionItemAccountabilitySignal("unknown"), null);
+  assert.deepEqual(
+    ["reopened", "repeated_updates", "stale", "recent_activity"].map(
+      getActionItemAccountabilitySignalLabel,
+    ),
+    ["Reopened", "Repeated updates", "Stale", "Recent activity"],
+  );
+});
+
+test("review analytics metrics map to review filters and expose selected state", () => {
+  assert.deepEqual(
+    [
+      "total_reviewable",
+      "reviewed",
+      "needs_review",
+      "reopened_since_review",
+    ].map(getActionItemReviewStateForMetric),
+    ["reviewable", "reviewed", "needs_review", "reopened_since_review"],
+  );
+  assert.equal(isActionItemReviewMetricSelected("reviewed", "reviewed"), true);
+  assert.equal(
+    isActionItemReviewMetricSelected("reopened_since_review", "reviewed"),
+    false,
+  );
+  assert.equal(
+    isActionItemReviewMetricSelected("review_coverage_percent", "all"),
+    false,
+  );
 });
 
 test("parses page values safely and normalizes invalid values", () => {
@@ -85,6 +134,65 @@ test("follow-up links preserve dashboard filters and pagination", () => {
   assert.equal(query.get("actionItemStatus"), "follow_up");
   assert.equal(query.get("actionItemsPage"), "3");
   assert.equal(parseActionItemAccountabilityFilter("unknown"), null);
+});
+
+test("signal filters and pagination preserve dashboard URL state", () => {
+  const filters = dashboardFilters("planning", "failed");
+  const firstPage = buildActionItemAccountabilityHref(
+    filters,
+    "reopened",
+  );
+  const pageTwo = buildActionItemAccountabilityHref(
+    filters,
+    "recent_activity",
+    2,
+  );
+  const firstQuery = new URLSearchParams(firstPage.split("?")[1]);
+  const secondQuery = new URLSearchParams(pageTwo.split("?")[1]);
+
+  assert.equal(firstQuery.get("q"), "planning");
+  assert.equal(firstQuery.get("status"), "failed");
+  assert.equal(firstQuery.get("actionItemStatus"), "reopened");
+  assert.equal(secondQuery.get("q"), "planning");
+  assert.equal(secondQuery.get("status"), "failed");
+  assert.equal(secondQuery.get("actionItemStatus"), "recent_activity");
+  assert.equal(secondQuery.get("actionItemsPage"), "2");
+});
+
+test("needs-review queue links preserve dashboard URL state and pagination", () => {
+  const filters = dashboardFilters("planning", "failed");
+  const href = buildActionItemAccountabilityHref(
+    filters,
+    "needs_review",
+    2,
+  );
+  const query = new URLSearchParams(href.split("?")[1]);
+
+  assert.equal(query.get("q"), "planning");
+  assert.equal(query.get("status"), "failed");
+  assert.equal(query.get("actionItemStatus"), "needs_review");
+  assert.equal(query.get("actionItemsPage"), "2");
+});
+
+test("review analytics drilldown preserves status filters and pagination", () => {
+  const filters = dashboardFilters("planning", "failed");
+  const href = buildActionItemAccountabilityHref(
+    filters,
+    "open",
+    3,
+    "reopened_since_review",
+  );
+  const query = new URLSearchParams(href.split("?")[1]);
+
+  assert.equal(query.get("q"), "planning");
+  assert.equal(query.get("status"), "failed");
+  assert.equal(query.get("actionItemStatus"), "open");
+  assert.equal(query.get("actionItemReviewState"), "reopened_since_review");
+  assert.equal(query.get("actionItemsPage"), "3");
+  assert.equal(
+    parseActionItemReviewStateFilter(query.get("actionItemReviewState")),
+    "reopened_since_review",
+  );
 });
 
 test("follow-up reasons have readable labels", () => {

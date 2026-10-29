@@ -11,8 +11,15 @@ from app.schemas.meeting_action_items import (
     ActionItemAccountabilityFilter,
     ActionItemAccountabilityItemsResponse,
     ActionItemAccountabilityRecord,
+    ActionItemAccountabilitySignals,
     ActionItemAccountabilitySummary,
-    ActionItemStatusUpdate,
+    ActionItemReviewState,
+    ActionItemHistoryRecord,
+    ActionItemHistoryResponse,
+    ActionItemReviewAnalytics,
+    ActionItemSignalReviewResponse,
+    ActionItemSignalReviewState,
+    ActionItemUpdate,
     TrackedActionItem,
     TrackedActionItemsResponse,
 )
@@ -186,7 +193,7 @@ def get_action_item_accountability_summary(
     try:
         result = (
             supabase.schema("public")
-            .rpc("get_my_action_item_accountability_summary")
+            .rpc("get_my_action_item_accountability_summary", {})
             .execute()
         )
     except Exception as exc:
@@ -213,11 +220,49 @@ def get_action_item_accountability_summary(
 
 
 @router.get(
+    "/action-items/review-analytics",
+    response_model=ActionItemReviewAnalytics,
+)
+def get_action_item_review_analytics(
+    authorization: str | None = Header(default=None),
+) -> ActionItemReviewAnalytics:
+    supabase = _get_authenticated_client(authorization)
+    try:
+        result = (
+            supabase.schema("public")
+            .rpc("get_my_action_item_review_analytics", {})
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Action-item review analytics RPC failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item review analytics.",
+        ) from exc
+
+    if not isinstance(result.data, list) or len(result.data) != 1:
+        logger.error("Action-item review analytics RPC returned an invalid result.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item review analytics.",
+        )
+    try:
+        return ActionItemReviewAnalytics.model_validate(result.data[0])
+    except Exception as exc:
+        logger.error("Action-item review analytics validation failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item review analytics.",
+        ) from exc
+
+
+@router.get(
     "/action-items/accountability-items",
     response_model=ActionItemAccountabilityItemsResponse,
 )
 def get_action_item_accountability_items(
     status: ActionItemAccountabilityFilter = Query(default="all"),
+    review_state: ActionItemReviewState = Query(default="all"),
     page: int = Query(default=1, ge=1, le=100_000),
     authorization: str | None = Header(default=None),
 ) -> ActionItemAccountabilityItemsResponse:
@@ -228,7 +273,11 @@ def get_action_item_accountability_items(
             supabase.schema("public")
             .rpc(
                 "get_my_action_item_accountability_items",
-                {"p_status": status, "p_offset": offset},
+                {
+                    "p_status": status,
+                    "p_offset": offset,
+                    "p_review_state": review_state,
+                },
             )
             .execute()
         )
@@ -317,21 +366,22 @@ def sync_meeting_action_items(
     "/{meeting_id}/action-items/{action_item_id}",
     response_model=TrackedActionItem,
 )
-def update_meeting_action_item_status(
+def update_meeting_action_item(
     meeting_id: UUID,
     action_item_id: UUID,
-    update: ActionItemStatusUpdate,
+    update: ActionItemUpdate,
     authorization: str | None = Header(default=None),
 ) -> TrackedActionItem:
     supabase = _get_authenticated_client(authorization)
     meeting_id_value = str(meeting_id)
     _verify_meeting_access(supabase, meeting_id_value)
+    update_values = update.model_dump(exclude_unset=True)
 
     try:
         result = (
             supabase.schema("public")
             .table("meeting_action_items")
-            .update({"status": update.status})
+            .update(update_values)
             .eq("meeting_id", meeting_id_value)
             .eq("id", str(action_item_id))
             .select(
@@ -342,10 +392,10 @@ def update_meeting_action_item_status(
             .execute()
         )
     except Exception as exc:
-        logger.error("Action-item status update failed (%s).", type(exc).__name__)
+        logger.error("Action-item update failed (%s).", type(exc).__name__)
         raise HTTPException(
             status_code=500,
-            detail="Unable to update action-item status.",
+            detail="Unable to update action item.",
         ) from exc
 
     if result.data is None:
@@ -361,3 +411,194 @@ def update_meeting_action_item_status(
         today=datetime.now(timezone.utc).date(),
     )
     return TrackedActionItem.model_validate(updated_item)
+
+
+@router.post(
+    "/{meeting_id}/action-items/{action_item_id}/review",
+    response_model=ActionItemSignalReviewResponse,
+)
+def review_meeting_action_item_signals(
+    meeting_id: UUID,
+    action_item_id: UUID,
+    authorization: str | None = Header(default=None),
+) -> ActionItemSignalReviewResponse:
+    supabase = _get_authenticated_client(authorization)
+    meeting_id_value = str(meeting_id)
+    action_item_id_value = str(action_item_id)
+    _verify_meeting_access(supabase, meeting_id_value)
+
+    try:
+        action_item_result = (
+            supabase.schema("public")
+            .table("meeting_action_items")
+            .select("id")
+            .eq("meeting_id", meeting_id_value)
+            .eq("id", action_item_id_value)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Action-item review target lookup failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to check action-item access.",
+        ) from exc
+
+    if action_item_result.data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Action item not found or inaccessible.",
+        )
+
+    try:
+        result = (
+            supabase.rpc(
+                "review_my_action_item_signals",
+                {
+                    "p_meeting_id": meeting_id_value,
+                    "p_action_item_id": action_item_id_value,
+                },
+            )
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Action-item signal review failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to mark action-item signals as reviewed.",
+        ) from exc
+
+    if isinstance(result.data, list) and not result.data:
+        raise HTTPException(
+            status_code=422,
+            detail="This action item has no accountability signals to review.",
+        )
+    if not isinstance(result.data, list) or len(result.data) != 1:
+        logger.error("Action-item signal review returned an invalid result.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to mark action-item signals as reviewed.",
+        )
+
+    try:
+        return ActionItemSignalReviewResponse.model_validate(result.data[0])
+    except Exception as exc:
+        logger.error("Action-item signal review validation failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to mark action-item signals as reviewed.",
+        ) from exc
+
+
+@router.get(
+    "/{meeting_id}/action-items/{action_item_id}/history",
+    response_model=ActionItemHistoryResponse,
+)
+def get_meeting_action_item_history(
+    meeting_id: UUID,
+    action_item_id: UUID,
+    authorization: str | None = Header(default=None),
+) -> ActionItemHistoryResponse:
+    supabase = _get_authenticated_client(authorization)
+    meeting_id_value = str(meeting_id)
+    action_item_id_value = str(action_item_id)
+    _verify_meeting_access(supabase, meeting_id_value)
+
+    try:
+        action_item_result = (
+            supabase.schema("public")
+            .table("meeting_action_items")
+            .select("id")
+            .eq("meeting_id", meeting_id_value)
+            .eq("id", action_item_id_value)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Action-item history target lookup failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to check action-item access.",
+        ) from exc
+
+    if action_item_result.data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Action item not found or inaccessible.",
+        )
+
+    try:
+        result = (
+            supabase.schema("public")
+            .table("meeting_action_item_history")
+            .select(
+                "id, action_item_id, meeting_id, action_item_text, "
+                "field_changed, previous_value, new_value, changed_at"
+            )
+            .eq("meeting_id", meeting_id_value)
+            .eq("action_item_id", action_item_id_value)
+            .order("changed_at", desc=True)
+            .order("id", desc=True)
+            .execute()
+        )
+        if not isinstance(result.data, list):
+            raise ValueError("Action-item history query returned invalid data.")
+        history_items = [
+            ActionItemHistoryRecord.model_validate(item) for item in result.data
+        ]
+    except Exception as exc:
+        logger.error("Action-item history retrieval failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item history.",
+        ) from exc
+
+    try:
+        signal_result = (
+            supabase.rpc(
+                "get_my_action_item_accountability_signals",
+                {"p_action_item_id": action_item_id_value},
+            )
+            .execute()
+        )
+        if not isinstance(signal_result.data, list) or len(signal_result.data) != 1:
+            raise ValueError("Action-item accountability signal result is invalid.")
+        accountability_signals = ActionItemAccountabilitySignals.model_validate(
+            signal_result.data[0]
+        ).accountability_signals
+    except Exception as exc:
+        logger.error("Action-item signal retrieval failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item accountability signals.",
+        ) from exc
+
+    try:
+        review_state_result = (
+            supabase.rpc(
+                "get_my_action_item_signal_review_state",
+                {"p_action_item_id": action_item_id_value},
+            )
+            .execute()
+        )
+        if (
+            not isinstance(review_state_result.data, list)
+            or len(review_state_result.data) != 1
+        ):
+            raise ValueError("Action-item signal review state is invalid.")
+        review_state = ActionItemSignalReviewState.model_validate(
+            review_state_result.data[0]
+        )
+    except Exception as exc:
+        logger.error("Action-item review-state retrieval failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load action-item review state.",
+        ) from exc
+
+    return ActionItemHistoryResponse(
+        items=history_items,
+        accountability_signals=accountability_signals,
+        reviewed_at=review_state.reviewed_at,
+        needs_review=review_state.needs_review,
+    )

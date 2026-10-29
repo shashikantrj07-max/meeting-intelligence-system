@@ -1,54 +1,76 @@
 # Meeting Intelligence System
 
-A planned application for organizing meetings and turning their recordings into
-searchable transcripts, summaries, decisions, and follow-up work. This
-repository is in **Phase 4**: it includes Supabase Auth, a protected meeting
-workspace, and a meeting transcript table whose row-level security inherits
-ownership from its parent meeting.
+A meeting workspace for managing meetings, storing transcripts, generating
+structured meeting intelligence, and following up on tracked action items.
+Implemented capabilities include Supabase authentication, owner-scoped meeting
+and transcript data, media upload and transcription, meeting insights, and the
+Phase 9 action-item accountability and review workflow.
 
-## Planned features
+## Implemented functionality
 
-All features in this section are planned and are not implemented yet:
+- **Authentication and meeting workspace:** Supabase email/password
+  authentication, server-verified protection for authenticated pages, and
+  create, view, edit, and delete operations for a user's meetings.
+- **Transcripts and meeting intelligence:** create and edit transcripts,
+  upload meeting audio/video to the private Supabase Storage bucket, request
+  transcription, and generate a meeting summary and structured insights from a
+  transcript. Processing state is available in the meeting workspace.
+- **Tracked action items:** track status, owner, due date, and priority;
+  review changes in action-item history; and view database-derived follow-up
+  classifications and accountability signals.
+- **Signal review and analytics:** acknowledge action-item signals, see review
+  coverage and related counts, and filter/paginate the action-item drilldown by
+  accountability and review state.
+- **Database ownership controls:** migrations define row-level security for
+  meeting-owned data and restricted access to action-item history and review
+  state. The API routes that handle action-item, transcription, and insight
+  requests verify Supabase bearer tokens; this does not imply that every API
+  route in the repository has the same authentication behavior.
 
-- Project and meeting management, including audio/video upload
-- Transcription and speaker identification
-- Summaries, decisions, action items, questions, and risks/blockers
-- Chat with meetings using RAG and search across meetings
-- Decision/action tracking, analytics, and report exports
-- Interchangeable AI providers and local inference
+Migrations and tests are source files, not proof that a particular database has
+been migrated. Apply them to a development database and run the matching
+verification scripts as described in [database/README.md](database/README.md).
+
+## Planned functionality
+
+- Search across transcript and meeting content (the dashboard currently
+  supports meeting-title search).
+- Retrieval-augmented chat, vector search, and pgvector.
+- Export and reporting workflows.
+- Additional interchangeable AI providers and local inference.
+- Production deployment and operational hardening.
 
 ## Technology stack
 
-- **Frontend:** Next.js, React, TypeScript, Tailwind CSS, shadcn/ui (planned)
+- **Frontend:** Next.js, React, TypeScript, and Tailwind CSS
 - **Backend:** Python, FastAPI
-- **Database:** PostgreSQL (meeting and transcript schema with RLS);
-  pgvector (planned)
-- **Authentication and file storage:** Supabase Auth (implemented in Phase 1);
-  Supabase Storage (planned)
-- **AI:** Gemini primary, Groq secondary, Ollama local alternative (planned)
-- **Speech and retrieval:** Whisper, pyannote.audio, LangChain (planned)
-- **Charts and deployment:** Recharts, Vercel, Render/Railway, Supabase (planned)
+- **Database:** PostgreSQL through Supabase, with owner-scoped RLS; pgvector is
+  planned
+- **Authentication and file storage:** Supabase Auth and private Supabase
+  Storage
+- **AI and transcription:** meeting-insight generation and audio/video
+  transcription are implemented; additional providers, diarization, and
+  retrieval integrations are planned
 
 ## High-level architecture
 
-The Next.js frontend and FastAPI backend are separate applications. The frontend
-will call the backend over HTTP and will not hold private API keys or
-server-privileged credentials. The backend will own business logic, privileged
-database access, file processing, AI orchestration, transcription, RAG, and
-exports. AI providers will be accessed through interchangeable backend
-interfaces so application logic is not tied to Gemini.
+The Next.js frontend and FastAPI backend are separate applications. The
+frontend calls FastAPI over HTTP and uses only public Supabase configuration;
+it does not contain private API keys or server-privileged credentials. The
+backend verifies bearer tokens on the implemented action-item, transcription,
+and insight routes and uses request-scoped Supabase access for their data
+operations. RAG and exports remain planned.
 
 See [docs/architecture.md](docs/architecture.md) for the architecture and
-authentication flow, and [database/README.md](database/README.md) for
-migrations and verification. Storage, AI, and media processing are planned
-for later phases.
+authentication flow, and [database/README.md](database/README.md) for migration
+and verification instructions.
 
 ## Repository structure
 
 ```text
 meeting-intelligence-system/
-├── frontend/                  # Next.js + TypeScript + Tailwind foundation
-├── backend/                   # FastAPI app and Python dependencies
+├── frontend/                  # Next.js + TypeScript + Tailwind application
+├── backend/                   # FastAPI app, routes, and services
 │   └── app/
 ├── database/                  # PostgreSQL migrations and verification scripts
 │   ├── migrations/
@@ -123,11 +145,10 @@ The health check is available at `http://127.0.0.1:8000/health` and returns
 
 ### Database setup
 
-Phase 2 and Phase 4 add PostgreSQL migrations and SQL verification scripts.
-They are not automatically applied by starting the frontend or backend. To
-apply and verify them against a development database, follow
-[database/README.md](database/README.md). The project does not currently
-include pgvector, media upload, or AI processing.
+Database migrations are not automatically applied by starting the frontend or
+backend. Follow [database/README.md](database/README.md) to review, apply, and
+verify migrations against a development database. The README does not certify
+the migration state of any live or local database.
 
 ## Current project status
 
@@ -143,10 +164,22 @@ view, edit, and delete their own meetings.
 
 **Phase 4 — transcript management:** Transcript migration, ownership RLS,
 manual TypeScript types, and authenticated create/view/edit/delete UI are
-implemented. Apply the Phase 4 migration to the configured Supabase project
-before using the transcript UI; live transcript CRUD and isolation checks
-remain pending. No AI summarization, transcription, or media processing is
-included.
+implemented.
+
+**Phases 5–6 — meeting insights and media processing:** Structured meeting
+insight generation from a transcript, audio/video file upload to private
+storage, transcription requests, and processing status are implemented.
+
+**Phase 8 and Phases 9A–9E — tracked action items:** Action items are synced
+from generated meeting insights and can be tracked by status, owner, due date,
+and priority. The dashboard includes accountability summaries, prioritized
+drilldown, and follow-up views.
+
+**Phases 9F–9J — history, signal review, analytics, and drilldown:** Database
+migrations add action-item change history, database-derived accountability
+signals, an acknowledgement workflow, review analytics, and review-state
+filtering in the paginated drilldown. These SQL changes must be applied and
+verified separately for each database.
 
 ### Authentication routes
 
@@ -158,12 +191,9 @@ Supabase email confirmation may be enabled for the project. When enabled,
 signup asks the user to confirm their email; the confirmation callback
 establishes the session and returns them to the dashboard.
 
-## Future development phases
+## Future development
 
-1. Add secure media upload and storage policies.
-2. Add transcription and diarization workflows.
-3. Add summaries and structured meeting insights.
-4. Add provider-backed RAG, meeting search, and tracking workflows.
-5. Add analytics, exports, deployment, and production hardening.
-
-These phases are a roadmap, not a claim that those capabilities already exist.
+Remaining work includes search across meeting content, RAG and pgvector,
+additional AI providers and local inference, diarization, exports, deployment,
+and production hardening. These items are planned and are not implied to be
+implemented by the completed phases above.

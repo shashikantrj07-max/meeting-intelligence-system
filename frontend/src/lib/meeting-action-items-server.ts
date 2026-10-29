@@ -1,8 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import type {
+  ActionItemAccountabilitySignal,
   ActionItemAccountabilityFilter,
   ActionItemFollowUpReason,
+  ActionItemReviewStateFilter,
 } from "@/lib/dashboard-accountability";
+import { parseActionItemAccountabilitySignal } from "@/lib/dashboard-accountability";
+import {
+  parseActionItemReviewAnalytics,
+  type MeetingActionItemReviewAnalytics,
+} from "@/lib/meeting-action-items-shared";
 
 export type ActionItemAccountabilitySummary = {
   total: number;
@@ -10,6 +17,11 @@ export type ActionItemAccountabilitySummary = {
   in_progress: number;
   completed: number;
   overdue: number;
+};
+
+export type ActionItemReviewAnalyticsResult = {
+  data: MeetingActionItemReviewAnalytics | null;
+  error: Error | null;
 };
 
 export type ActionItemAccountabilityRecord = {
@@ -29,6 +41,9 @@ export type ActionItemAccountabilityRecord = {
     | "no_usable_due_date"
     | "completed";
   follow_up_reason: ActionItemFollowUpReason | null;
+  accountability_signals: ActionItemAccountabilitySignal[];
+  reviewed_at: string | null;
+  needs_review: boolean;
 };
 
 export type ActionItemAccountabilityItems = {
@@ -101,9 +116,83 @@ export async function getActionItemAccountabilitySummary(): Promise<{
   }
 }
 
+export async function getActionItemReviewAnalytics(): Promise<ActionItemReviewAnalyticsResult> {
+  let supabase: Awaited<ReturnType<typeof createClient>>;
+  try {
+    supabase = await createClient();
+  } catch {
+    return {
+      data: null,
+      error: new Error("Unable to initialize review analytics."),
+    };
+  }
+  let accessToken: string | null;
+  let sessionError: Error | null;
+  try {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+    sessionError = error;
+    accessToken = session?.access_token ?? null;
+  } catch {
+    return {
+      data: null,
+      error: new Error("Unable to authenticate the review analytics request."),
+    };
+  }
+
+  if (sessionError) {
+    return { data: null, error: sessionError };
+  }
+  if (!accessToken) {
+    return {
+      data: null,
+      error: new Error("A signed-in session is required for review analytics."),
+    };
+  }
+
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!baseUrl) {
+    return {
+      data: null,
+      error: new Error("NEXT_PUBLIC_API_BASE_URL is not configured."),
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `${baseUrl.replace(/\/+$/, "")}/api/meetings/action-items/review-analytics`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: "no-store",
+      },
+    );
+    const body: unknown = await response.json();
+
+    if (!response.ok) {
+      return { data: null, error: new Error(readErrorDetail(body)) };
+    }
+
+    return {
+      data: parseActionItemReviewAnalytics(body),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      data: null,
+      error:
+        error instanceof Error
+          ? error
+          : new Error("Unable to load action-item review analytics."),
+    };
+  }
+}
+
 export async function getActionItemAccountabilityItems(
   filter: ActionItemAccountabilityFilter,
   page: number,
+  reviewState: ActionItemReviewStateFilter = "all",
 ): Promise<{
   data: ActionItemAccountabilityItems | null;
   error: Error | null;
@@ -130,7 +219,11 @@ export async function getActionItemAccountabilityItems(
       error: new Error("NEXT_PUBLIC_API_BASE_URL is not configured."),
     };
   }
-  const query = new URLSearchParams({ status: filter, page: String(page) });
+  const query = new URLSearchParams({
+    status: filter,
+    review_state: reviewState,
+    page: String(page),
+  });
 
   try {
     const response = await fetch(
@@ -228,7 +321,13 @@ function isActionItemAccountabilityRecord(
       item.follow_up_reason === "due_soon" ||
       item.follow_up_reason === "high_priority" ||
       item.follow_up_reason === "missing_due_date" ||
-      item.follow_up_reason === "due_later")
+      item.follow_up_reason === "due_later") &&
+    Array.isArray(item.accountability_signals) &&
+    item.accountability_signals.every(
+      (signal) => parseActionItemAccountabilitySignal(signal) !== null,
+    ) &&
+    (typeof item.reviewed_at === "string" || item.reviewed_at === null) &&
+    typeof item.needs_review === "boolean"
   );
 }
 

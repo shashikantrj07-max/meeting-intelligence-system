@@ -1,7 +1,10 @@
 import { Suspense } from "react";
 import Link from "next/link";
+import { io } from "next/cache";
 
 import { MeetingStatusBadge } from "@/components/meetings/meeting-status-badge";
+import { ActionItemReviewAnalyticsPanel } from "@/components/meetings/action-item-review-analytics-panel";
+import { ActionItemSignalReviewButton } from "@/components/meetings/action-item-signal-review-button";
 import { DashboardMeetingFilters } from "@/components/meetings/dashboard-meeting-filters";
 import {
   formatProcessingStage,
@@ -12,13 +15,17 @@ import {
 import {
   buildActionItemMeetingHref,
   buildActionItemAccountabilityHref,
+  getActionItemAccountabilitySignalLabel,
   getActionItemFollowUpReasonLabel,
   parseActionItemAccountabilityFilter,
+  parseActionItemReviewStateFilter,
   parseActionItemsPage,
   type ActionItemAccountabilityFilter,
+  type ActionItemReviewStateFilter,
 } from "@/lib/dashboard-accountability";
 import {
   getActionItemAccountabilityItems,
+  getActionItemReviewAnalytics,
   getActionItemAccountabilitySummary,
 } from "@/lib/meeting-action-items-server";
 import { getDashboardMeetings } from "@/lib/meetings-server";
@@ -28,6 +35,7 @@ type DashboardSearchParams = {
   q?: string | string[];
   status?: string | string[];
   actionItemStatus?: string | string[];
+  actionItemReviewState?: string | string[];
   actionItemsPage?: string | string[];
 };
 
@@ -53,17 +61,29 @@ async function DashboardContent({
   const accountabilityFilter = parseActionItemAccountabilityFilter(
     params.actionItemStatus,
   );
+  const reviewState = parseActionItemReviewStateFilter(
+    params.actionItemReviewState,
+  );
+  const drilldownFilter = accountabilityFilter ?? (reviewState ? "all" : null);
   const accountabilityPage = parseActionItemsPage(params.actionItemsPage);
-  const [meetingsResult, accountabilityResult, accountabilityItemsResult] =
-    await Promise.all([
+  await io();
+
+  const [
+    meetingsResult,
+    accountabilityResult,
+    accountabilityItemsResult,
+    reviewAnalyticsResult,
+  ] = await Promise.all([
     getDashboardMeetings(filters),
     getActionItemAccountabilitySummary(),
-    accountabilityFilter
+    drilldownFilter
       ? getActionItemAccountabilityItems(
-          accountabilityFilter,
+          drilldownFilter,
           accountabilityPage,
+          reviewState ?? "all",
         )
       : Promise.resolve({ data: null, error: null }),
+    getActionItemReviewAnalytics(),
   ]);
   if (
     accountabilityResult.error &&
@@ -81,6 +101,15 @@ async function DashboardContent({
     console.error(
       "Unable to load action-item accountability items:",
       accountabilityItemsResult.error,
+    );
+  }
+  if (
+    reviewAnalyticsResult.error &&
+    process.env.NODE_ENV === "development"
+  ) {
+    console.error(
+      "Unable to load action-item review analytics:",
+      reviewAnalyticsResult.error,
     );
   }
   const { data: meetings, error } = meetingsResult;
@@ -137,6 +166,12 @@ async function DashboardContent({
             >
               View follow-up
             </Link>
+            <Link
+              className="text-sm font-semibold text-blue-700 underline-offset-2 hover:underline"
+              href={buildActionItemAccountabilityHref(filters, "needs_review")}
+            >
+              Review signals
+            </Link>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <AccountabilityCard
@@ -186,10 +221,19 @@ async function DashboardContent({
           page to retry.
         </p>
       )}
+      <ActionItemReviewAnalyticsPanel
+        key={`${JSON.stringify(reviewAnalyticsResult.data)}:${reviewAnalyticsResult.error?.message ?? ""}`}
+        initialAnalytics={reviewAnalyticsResult.data}
+        initialError={reviewAnalyticsResult.error?.message ?? null}
+        filters={filters}
+        accountabilityFilter={accountabilityFilter}
+        selectedReviewState={reviewState}
+      />
 
-      {accountabilityFilter ? (
+      {drilldownFilter ? (
         <AccountabilityDrilldown
-          filter={accountabilityFilter}
+          filter={drilldownFilter}
+          reviewState={reviewState}
           filters={filters}
           page={accountabilityPage}
           result={accountabilityItemsResult}
@@ -345,11 +389,13 @@ function AccountabilityCard({
 
 function AccountabilityDrilldown({
   filter,
+  reviewState,
   filters,
   page,
   result,
 }: {
   filter: ActionItemAccountabilityFilter;
+  reviewState: ActionItemReviewStateFilter | null;
   filters: ReturnType<typeof parseDashboardFilters>;
   page: number;
   result: Awaited<ReturnType<typeof getActionItemAccountabilityItems>>;
@@ -362,6 +408,18 @@ function AccountabilityDrilldown({
     overdue: "Overdue",
     needs_attention: "Needs attention",
     follow_up: "Follow-up",
+    reopened: "Reopened",
+    repeated_updates: "Repeated updates",
+    stale: "Stale",
+    recent_activity: "Recent activity",
+    needs_review: "Needs review",
+  };
+  const reviewStateLabels: Record<ActionItemReviewStateFilter, string> = {
+    all: "All review states",
+    reviewable: "Total reviewable",
+    reviewed: "Reviewed",
+    needs_review: "Needs review",
+    reopened_since_review: "Reopened since review",
   };
   const items = result.data?.items ?? [];
 
@@ -371,8 +429,16 @@ function AccountabilityDrilldown({
       className="mt-8 rounded-xl border border-zinc-200 bg-white p-5"
     >
       <h2 className="text-lg font-semibold text-zinc-950">
-        {filterLabels[filter]} action items
+        {reviewState
+          ? `${reviewStateLabels[reviewState]} action items`
+          : `${filterLabels[filter]} action items`}
       </h2>
+      {reviewState ? (
+        <p className="mt-1 text-sm text-zinc-600">
+          Review filter: {reviewStateLabels[reviewState]}. Select a different
+          metric above to change the review state.
+        </p>
+      ) : null}
       <nav
         aria-label="Filter accountability items"
         className="mt-3 flex flex-wrap gap-2"
@@ -381,6 +447,11 @@ function AccountabilityDrilldown({
           [
             "needs_attention",
             "follow_up",
+            "reopened",
+            "repeated_updates",
+            "stale",
+            "recent_activity",
+            "needs_review",
             "overdue",
             "open",
             "in_progress",
@@ -395,7 +466,12 @@ function AccountabilityDrilldown({
                 ? "border-blue-700 bg-blue-50 text-blue-900"
                 : "border-zinc-300 text-zinc-700 hover:bg-zinc-50"
             }`}
-            href={buildActionItemAccountabilityHref(filters, option)}
+            href={buildActionItemAccountabilityHref(
+              filters,
+              option,
+              1,
+              reviewState,
+            )}
             key={option}
           >
             {filterLabels[option]}
@@ -449,12 +525,35 @@ function AccountabilityDrilldown({
                       </span>
                     ) : null}
                   </p>
+                  {item.accountability_signals.length > 0 ? (
+                    <ul
+                      aria-label="Action-item accountability signals"
+                      className="mt-2 flex flex-wrap gap-1.5"
+                    >
+                      {item.accountability_signals.map((signal) => (
+                        <li
+                          className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-900"
+                          key={signal}
+                        >
+                          {getActionItemAccountabilitySignalLabel(signal)}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {item.needs_review ? (
+                    <ActionItemSignalReviewButton
+                      actionItemId={item.id}
+                      actionItemText={item.text}
+                      meetingId={item.meeting_id}
+                    />
+                  ) : null}
                 </div>
                 <Link
                   className="shrink-0 text-sm font-medium text-blue-700 underline-offset-2 hover:underline"
                   href={buildActionItemMeetingHref(item.meeting_id)}
                 >
-                  {item.meeting_title}
+                  <span>{item.meeting_title}</span>
+                  <span className="block text-xs">Open meeting and history</span>
                 </Link>
               </li>
             ))}
@@ -470,6 +569,7 @@ function AccountabilityDrilldown({
                   filters,
                   filter,
                   page - 1,
+                  reviewState,
                 )}
               >
                 Previous
@@ -485,6 +585,7 @@ function AccountabilityDrilldown({
                   filters,
                   filter,
                   page + 1,
+                  reviewState,
                 )}
               >
                 Next

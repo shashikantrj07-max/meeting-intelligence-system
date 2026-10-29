@@ -14,6 +14,16 @@ export type MeetingProcessingStage =
   | "completed"
   | "failed";
 export type MeetingActionItemStatus = "open" | "in_progress" | "completed";
+export type MeetingActionItemHistoryField =
+  | "status"
+  | "owner"
+  | "due_date"
+  | "priority";
+export type MeetingActionItemAccountabilitySignal =
+  | "reopened"
+  | "repeated_updates"
+  | "stale"
+  | "recent_activity";
 
 type Relationship = {
   foreignKeyName: string;
@@ -339,6 +349,55 @@ export type Database = {
         [
           {
             foreignKeyName: "meeting_action_items_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          },
+        ]
+      >;
+      meeting_action_item_history: Table<
+        {
+          id: string;
+          action_item_id: string;
+          meeting_id: string;
+          action_item_text: string;
+          field_changed: MeetingActionItemHistoryField;
+          previous_value: string | null;
+          new_value: string | null;
+          changed_at: string;
+        },
+        never,
+        never,
+        [
+          {
+            foreignKeyName: "meeting_action_item_history_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          },
+        ]
+      >;
+      meeting_action_item_signal_reviews: Table<
+        {
+          action_item_id: string;
+          meeting_id: string;
+          reviewed_through: string;
+          reviewed_at: string;
+        },
+        never,
+        never,
+        [
+          {
+            foreignKeyName: "meeting_action_item_signal_reviews_action_item_id_fkey";
+            columns: ["action_item_id"];
+            isOneToOne: true;
+            referencedRelation: "meeting_action_items";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "meeting_action_item_signal_reviews_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: false;
             referencedRelation: "meetings";
