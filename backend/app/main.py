@@ -9,28 +9,31 @@ from app.routers.meeting_transcription import (
     router as meeting_transcription_router,
 )
 
-app = FastAPI(title="Meeting Intelligence System API")
+def create_app(frontend_origin: str | None = None) -> FastAPI:
+    app = FastAPI(title="Meeting Intelligence System API")
+    allowed_origins = (
+        [frontend_origin]
+        if frontend_origin
+        else ["http://localhost:3000", "http://127.0.0.1:3000"]
+    )
 
-allowed_origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-if settings.FRONTEND_ORIGIN:
-    allowed_origins.append(settings.FRONTEND_ORIGIN)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "PATCH", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "PATCH", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
-)
+    app.include_router(meeting_insights_router)
+    app.include_router(meeting_transcription_router)
+    app.include_router(meeting_action_items_router)
 
-app.include_router(meeting_insights_router)
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
 
-app.include_router(meeting_transcription_router)
-app.include_router(meeting_action_items_router)
+    return app
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+
+app = create_app(settings.FRONTEND_ORIGIN)

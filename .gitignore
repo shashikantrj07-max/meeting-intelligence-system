@@ -55,3 +55,4 @@ Desktop.ini
 !.vscode/launch.json
 !.vscode/tasks.json
 *.code-workspace
+backend/.venv_test/
