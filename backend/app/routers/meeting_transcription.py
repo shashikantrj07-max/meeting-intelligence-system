@@ -5,17 +5,24 @@ import logging
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from app.config import settings
 from app.services.ai.gemini import GeminiMeetingInsightsProvider
 from app.schemas.meeting_insights import MeetingInsights
 from app.services.supabase import create_request_supabase_client
 from app.services.meeting_action_items import sync_generated_action_items
+from app.services.processing_jobs import (
+    LeaseLostError,
+    ProcessingJobError,
+    enqueue_meeting_processing_job,
+)
 from app.services.transcription.whisper import WhisperTranscriptionService
 
 
@@ -58,10 +65,9 @@ def _server_error(
     error: Exception,
 ) -> HTTPException:
     logger.error(
-        "%s failed (%s): %s",
+        "%s failed (%s).",
         stage,
         type(error).__name__,
-        str(error),
     )
 
     return HTTPException(
@@ -185,10 +191,8 @@ def _mark_processing_failed(
 
     except Exception as exc:
         logger.error(
-            "Unable to record failed transcription state "
-            "(%s): %s",
+            "Unable to record failed transcription state (%s).",
             type(exc).__name__,
-            str(exc),
         )
 
 
@@ -305,6 +309,10 @@ def _generate_and_save_insights(
     meeting_id: str,
     transcript_text: str,
     started_at: str,
+    *,
+    job_id: str | None = None,
+    worker_id: str | None = None,
+    lease_token: str | None = None,
 ) -> None:
     """
     Generate Gemini meeting intelligence and save it.
@@ -324,8 +332,15 @@ def _generate_and_save_insights(
             flush=True,
         )
 
+        generation_started = perf_counter()
         insights: MeetingInsights = GeminiMeetingInsightsProvider().generate(
             transcript_text
+        )
+        logger.info(
+            "Meeting intelligence generation stage completed: "
+            "elapsed_ms=%d transcript_characters=%d",
+            int((perf_counter() - generation_started) * 1000),
+            len(transcript_text),
         )
 
         print(
@@ -334,25 +349,12 @@ def _generate_and_save_insights(
         )
 
     except Exception as exc:
-        print(
-            "=== AUTOMATIC MEETING INTELLIGENCE FAILED ===",
-            flush=True,
-        )
-
-        print(
-            f"ERROR TYPE: {type(exc).__name__}",
-            flush=True,
-        )
-
-        print(
-            f"ERROR: {exc}",
-            flush=True,
-        )
-
-        logger.exception(
-            "Automatic meeting intelligence generation failed: "
-            "meeting_id=%s",
-            meeting_id,
+        if job_id is not None:
+            raise
+        logger.error(
+            "Automatic meeting intelligence generation failed "
+            "(error_type=%s).",
+            type(exc).__name__,
         )
 
         _mark_analysis_failed(
@@ -381,6 +383,44 @@ def _generate_and_save_insights(
         "=== INTELLIGENCE STEP 3: SAVE INSIGHTS ===",
         flush=True,
     )
+
+    if job_id is not None:
+        if worker_id is None or lease_token is None:
+            raise ValueError("A durable job requires its worker lease.")
+
+        from app.services.meeting_action_items import (
+            build_tracked_action_item_records,
+        )
+
+        save_started = perf_counter()
+        persisted = (
+            supabase.schema("public")
+            .rpc(
+                "complete_meeting_processing_job",
+                {
+                    "p_job_id": job_id,
+                    "p_worker_id": worker_id,
+                    "p_lease_token": lease_token,
+                    "p_insights": insight_data,
+                    "p_action_items": build_tracked_action_item_records(
+                        meeting_id,
+                        insights.action_items,
+                    ),
+                },
+            )
+            .execute()
+        )
+        if persisted.data is not True:
+            raise LeaseLostError(
+                "Processing job lease was superseded before saving results."
+            )
+        logger.info(
+            "Meeting intelligence persistence completed: elapsed_ms=%d "
+            "action_item_count=%d",
+            int((perf_counter() - save_started) * 1000),
+            len(insights.action_items),
+        )
+        return
 
     try:
         if not _is_current_analysis_attempt(
@@ -416,24 +456,9 @@ def _generate_and_save_insights(
         )
 
     except Exception as exc:
-        print(
-            "=== INTELLIGENCE SAVE FAILED ===",
-            flush=True,
-        )
-
-        print(
-            f"ERROR TYPE: {type(exc).__name__}",
-            flush=True,
-        )
-
-        print(
-            f"ERROR: {exc}",
-            flush=True,
-        )
-
-        logger.exception(
-            "Meeting insights save failed: meeting_id=%s",
-            meeting_id,
+        logger.error(
+            "Meeting insights save failed (%s).",
+            type(exc).__name__,
         )
 
         _mark_analysis_failed(
@@ -502,9 +527,10 @@ def _generate_and_save_insights(
 def _download_storage_file(
     storage_path: str,
     access_token: str,
-) -> bytes:
+    destination: Path,
+) -> int:
     """
-    Download a private Supabase Storage object through the Storage HTTP API.
+    Stream a private Supabase Storage object to a bounded temporary file.
 
     We intentionally do NOT use:
         supabase.storage.from_("meeting-files").download(...)
@@ -515,85 +541,99 @@ def _download_storage_file(
 
     storage_url = (
         f"{settings.SUPABASE_URL.rstrip('/')}"
-        f"/storage/v1/object/meeting-files/{storage_path}"
-    )
-
-    logger.info(
-        "=== STORAGE DOWNLOAD START === path=%r",
-        storage_path,
-    )
-
-    logger.info(
-        "Storage URL: %s",
-        storage_url,
+        f"/storage/v1/object/meeting-files/{quote(storage_path, safe='/')}"
     )
 
     try:
-        response = httpx.get(
+        with httpx.stream(
+            "GET",
             storage_url,
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "apikey": settings.SUPABASE_ANON_KEY,
             },
             timeout=120,
-        )
+        ) as response:
+            logger.info(
+                "Storage HTTP response: status=%s content_length=%s",
+                response.status_code,
+                response.headers.get("content-length"),
+            )
 
+            if response.status_code != 200:
+                logger.error(
+                    "Supabase Storage returned HTTP %s.",
+                    response.status_code,
+                )
+
+                if response.status_code in (401, 403):
+                    raise RuntimeError(
+                        "Supabase Storage denied access to the meeting file."
+                    )
+
+                if response.status_code == 404:
+                    raise RuntimeError(
+                        "The meeting file was not found in Supabase Storage."
+                    )
+
+                if response.status_code in (408, 429, 500, 502, 503, 504):
+                    raise ProcessingJobError(
+                        "Supabase Storage download failed with HTTP "
+                        f"{response.status_code}.",
+                        category="storage_unavailable",
+                        retryable=True,
+                    )
+
+                raise RuntimeError(
+                    "Supabase Storage download failed with HTTP "
+                    f"{response.status_code}."
+                )
+
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    expected_size = int(content_length)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        "Supabase Storage returned an invalid file size."
+                    ) from exc
+                if expected_size > MAX_DOWNLOAD_BYTES:
+                    raise RuntimeError(
+                        "Meeting file exceeds the maximum supported size."
+                    )
+
+            downloaded_size = 0
+            with destination.open("wb") as output_file:
+                for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                    downloaded_size += len(chunk)
+                    if downloaded_size > MAX_DOWNLOAD_BYTES:
+                        raise RuntimeError(
+                            "Meeting file exceeds the maximum supported size."
+                        )
+                    output_file.write(chunk)
     except httpx.HTTPError as exc:
         logger.error(
-            "Storage HTTP request failed: %s",
-            str(exc),
+            "Storage HTTP request failed (%s).",
+            type(exc).__name__,
         )
 
-        raise RuntimeError(
-            "Unable to connect to Supabase Storage."
+        raise ProcessingJobError(
+            "Unable to connect to Supabase Storage.",
+            category="storage_unavailable",
+            retryable=True,
         ) from exc
 
-    logger.info(
-        "Storage HTTP response: status=%s content_length=%s",
-        response.status_code,
-        response.headers.get("content-length"),
-    )
-
-    if response.status_code != 200:
-        logger.error(
-            "Supabase Storage returned HTTP %s: %s",
-            response.status_code,
-            response.text[:500],
-        )
-
-        if response.status_code in (401, 403):
-            raise RuntimeError(
-                "Supabase Storage denied access to the meeting file."
-            )
-
-        if response.status_code == 404:
-            raise RuntimeError(
-                "The meeting file was not found in Supabase Storage."
-            )
-
-        raise RuntimeError(
-            "Supabase Storage download failed with HTTP "
-            f"{response.status_code}."
-        )
-
-    downloaded = response.content
-
-    if not downloaded:
+    if downloaded_size == 0:
         raise RuntimeError(
             "Supabase Storage returned an empty file."
         )
 
-    if len(downloaded) > MAX_DOWNLOAD_BYTES:
-        raise RuntimeError(
-            "Meeting file exceeds the maximum supported size."
-        )
-
     logger.info(
         "=== STORAGE DOWNLOAD SUCCESS === %d bytes",
-        len(downloaded),
+        downloaded_size,
     )
 
-    return downloaded
+    return downloaded_size
 
 
 def _transcribe_and_save(
@@ -601,7 +641,11 @@ def _transcribe_and_save(
     meeting_id: str,
     storage_path: str,
     started_at: str,
-    access_token: str,
+    storage_bearer_token: str,
+    *,
+    job_id: str | None = None,
+    worker_id: str | None = None,
+    lease_token: str | None = None,
 ) -> None:
     """
     Background transcription worker.
@@ -645,11 +689,6 @@ def _transcribe_and_save(
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
 
-        print(
-            f"=== TEMP FILE CREATED: {temporary_path} ===",
-            flush=True,
-        )
-
         # ---------------------------------------------------------
         # STEP 2 — Download from Supabase Storage
         # ---------------------------------------------------------
@@ -659,36 +698,15 @@ def _transcribe_and_save(
             flush=True,
         )
 
-        downloaded = _download_storage_file(
+        downloaded_size = _download_storage_file(
             storage_path,
-            access_token,
-        )
-
-        print(
-            f"=== STORAGE DOWNLOAD COMPLETE: {len(downloaded)} BYTES ===",
-            flush=True,
-        )
-
-        # ---------------------------------------------------------
-        # STEP 3 — Write downloaded bytes to disk
-        # ---------------------------------------------------------
-
-        print(
-            "=== TRANSCRIPTION STEP 3: WRITE TEMP FILE ===",
-            flush=True,
-        )
-
-        temporary_path.write_bytes(downloaded)
-
-        print(
-            f"=== TEMP FILE WRITTEN: {temporary_path.stat().st_size} BYTES ===",
-            flush=True,
-        )
-
-        logger.info(
-            "Temporary meeting file created: %s (%d bytes)",
+            storage_bearer_token,
             temporary_path,
-            len(downloaded),
+        )
+
+        print(
+            f"=== STORAGE DOWNLOAD COMPLETE: {downloaded_size} BYTES ===",
+            flush=True,
         )
 
         # ---------------------------------------------------------
@@ -761,27 +779,48 @@ def _transcribe_and_save(
             flush=True,
         )
 
-        transcript_result = (
-            supabase.schema("public")
-            .table("meeting_transcripts")
-            .upsert(
-                {
-                    "meeting_id": meeting_id,
-                    "content": transcript_text,
-                },
-                on_conflict="meeting_id",
+        if job_id is not None:
+            if worker_id is None or lease_token is None:
+                raise ValueError("A durable job requires its worker lease.")
+            saved = (
+                supabase.schema("public")
+                .rpc(
+                    "save_meeting_transcript_for_job",
+                    {
+                        "p_job_id": job_id,
+                        "p_worker_id": worker_id,
+                        "p_lease_token": lease_token,
+                        "p_transcript": transcript_text,
+                    },
+                )
+                .execute()
             )
-            .select(
-                "id, meeting_id, content"
+            if saved.data is not True:
+                raise LeaseLostError(
+                    "Processing job lease was superseded before transcript save."
+                )
+        else:
+            transcript_result = (
+                supabase.schema("public")
+                .table("meeting_transcripts")
+                .upsert(
+                    {
+                        "meeting_id": meeting_id,
+                        "content": transcript_text,
+                    },
+                    on_conflict="meeting_id",
+                )
+                .select(
+                    "id, meeting_id, content"
+                )
+                .single()
+                .execute()
             )
-            .single()
-            .execute()
-        )
 
-        if transcript_result.data is None:
-            raise RuntimeError(
-                "Transcript save returned no data."
-            )
+            if transcript_result.data is None:
+                raise RuntimeError(
+                    "Transcript save returned no data."
+                )
 
         print(
             "=== TRANSCRIPT SAVED TO DATABASE ===",
@@ -797,11 +836,13 @@ def _transcribe_and_save(
             flush=True,
         )
 
-        claimed_analysis = _claim_analysis(
-            supabase,
-            meeting_id,
-            started_at,
-        )
+        claimed_analysis = True
+        if job_id is None:
+            claimed_analysis = _claim_analysis(
+                supabase,
+                meeting_id,
+                started_at,
+            )
 
         if not claimed_analysis:
             logger.info(
@@ -825,6 +866,9 @@ def _transcribe_and_save(
             meeting_id,
             transcript_text,
             started_at,
+            job_id=job_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
         )
 
         print(
@@ -839,24 +883,11 @@ def _transcribe_and_save(
         )
 
     except Exception as exc:
-        print(
-            "=== BACKGROUND TRANSCRIPTION FAILED ===",
-            flush=True,
-        )
-
-        print(
-            f"ERROR TYPE: {type(exc).__name__}",
-            flush=True,
-        )
-
-        print(
-            f"ERROR: {exc}",
-            flush=True,
-        )
-
-        logger.exception(
-            "Meeting transcription failed: meeting_id=%s",
-            meeting_id,
+        if job_id is not None:
+            raise
+        logger.error(
+            "Meeting transcription failed (%s).",
+            type(exc).__name__,
         )
 
         _mark_processing_failed(
@@ -889,10 +920,8 @@ def _transcribe_and_save(
 
             except Exception as exc:
                 logger.warning(
-                    "Unable to remove temporary transcription file "
-                    "(%s): %s",
+                    "Unable to remove temporary transcription file (%s).",
                     type(exc).__name__,
-                    str(exc),
                 )
 
 
@@ -903,8 +932,8 @@ def _transcribe_and_save(
 def transcribe_meeting_file(
     meeting_id: UUID,
     file_id: UUID,
-    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None),
+    idempotency_key: UUID = Header(alias="Idempotency-Key"),
 ) -> dict[str, str]:
     # ---------------------------------------------------------
     # STEP A — Extract bearer token
@@ -1090,71 +1119,28 @@ def transcribe_meeting_file(
             )
 
     # ---------------------------------------------------------
-    # STEP F — Claim transcription job
+    # STEP F — Persist transcription job before acknowledging
     # ---------------------------------------------------------
-
-    started_at_datetime = datetime.now(
-        timezone.utc
-    )
-
-    started_at = (
-        started_at_datetime.isoformat()
-    )
-
-    stale_before = (
-        started_at_datetime
-        - PROCESSING_STALE_AFTER
-    ).isoformat()
-
     try:
-        claimed = _claim_transcription(
+        job = enqueue_meeting_processing_job(
             supabase,
-            meeting_id_value,
-            started_at,
-            stale_before,
+            meeting_id=meeting_id_value,
+            job_type="transcribe",
+            idempotency_key=str(idempotency_key),
+            file_id=file_id_value,
         )
 
     except Exception as exc:
         raise _server_error(
-            "Unable to start meeting transcription.",
-            "Processing state update",
+            "Unable to queue meeting transcription.",
+            "Processing job enqueue",
             exc,
         ) from exc
-
-    if not claimed:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Meeting transcription is already "
-                "being processed."
-            ),
-        )
-
-    # ---------------------------------------------------------
-    # STEP G — Start background transcription
-    # ---------------------------------------------------------
-
-    print(
-        "=== QUEUING BACKGROUND TRANSCRIPTION ===",
-        flush=True,
-    )
-
-    background_tasks.add_task(
-        _transcribe_and_save,
-        supabase,
-        meeting_id_value,
-        storage_path,
-        started_at,
-        access_token,
-    )
-
-    print(
-        "=== BACKGROUND TRANSCRIPTION QUEUED ===",
-        flush=True,
-    )
 
     return {
         "meeting_id": meeting_id_value,
         "file_id": file_id_value,
-        "stage": "transcribing",
+        "job_id": job["job_id"],
+        "stage": job["status"],
+        "job_status": job["status"],
     }

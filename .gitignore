@@ -36,6 +36,7 @@ pip-wheel-metadata/
 venv/
 ENV/
 env/
+backend/.venv_old/
 
 # Generated and local files
 *.log

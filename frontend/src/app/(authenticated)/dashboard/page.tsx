@@ -8,6 +8,7 @@ import { ActionItemSignalReviewButton } from "@/components/meetings/action-item-
 import { DashboardMeetingFilters } from "@/components/meetings/dashboard-meeting-filters";
 import {
   formatProcessingStage,
+  getDashboardSearchMode,
   getProcessingFailureLabel,
   isActiveProcessingStage,
   parseDashboardFilters,
@@ -151,6 +152,9 @@ async function DashboardContent({
             <h2 className="text-lg font-semibold text-zinc-950">
               Action-item accountability
             </h2>
+            <p className="text-sm text-zinc-600">
+              Counts across all your meetings.
+            </p>
             <Link
               className="text-sm font-semibold text-blue-700 underline-offset-2 hover:underline"
               href={buildActionItemAccountabilityHref(
@@ -262,7 +266,9 @@ async function DashboardContent({
             No matching meetings
           </h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-zinc-600">
-            Try a different title or status filter.
+            {getDashboardSearchMode(filters.search) === "too_short"
+              ? "Enter at least 3 characters to search meeting titles and transcripts."
+              : "Try a different title, transcript phrase, or status filter."}
           </p>
           <Link
             className="mt-5 inline-flex rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
@@ -289,6 +295,14 @@ async function DashboardContent({
                         {meeting.description}
                       </p>
                     )}
+                    {meeting.searchContext ? (
+                      <p className="mt-3 line-clamp-3 break-words text-sm text-zinc-700">
+                        <span className="font-medium text-zinc-900">
+                          Transcript match:{" "}
+                        </span>
+                        {meeting.searchContext}
+                      </p>
+                    ) : null}
                   </div>
                   <MeetingStatusBadge status={meeting.status} />
                 </div>
@@ -606,7 +620,7 @@ function DashboardLoading() {
       aria-busy="true"
       className="mx-auto w-full max-w-6xl px-6 py-12 text-sm text-zinc-600"
     >
-      Loading your meetings...
+      Loading meetings and search results...
     </main>
   );
 }

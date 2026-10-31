@@ -51,18 +51,24 @@ export function DashboardMeetingFilters({
           className="block text-sm font-medium text-zinc-800"
           htmlFor="meeting-search"
         >
-          Search meeting titles
+          Search meetings
         </label>
         <input
           autoComplete="off"
           className="mt-2 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
           id="meeting-search"
           maxLength={200}
+          minLength={3}
           name="q"
-          placeholder="Search meetings"
+          placeholder="Search titles or transcripts"
           type="search"
           defaultValue={filters.search}
+          aria-describedby="meeting-search-help"
         />
+        <p className="mt-1 text-xs text-zinc-600" id="meeting-search-help">
+          Search titles and transcript text with at least 3 characters. Leave
+          blank to view all meetings.
+        </p>
       </div>
       <div>
         <label

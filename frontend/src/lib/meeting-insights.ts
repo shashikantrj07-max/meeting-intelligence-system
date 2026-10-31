@@ -2,7 +2,9 @@ import { createClient } from "@/lib/supabase/client";
 
 type GenerateMeetingInsightsResponse = {
   meeting_id: string;
-  stage: "analyzing";
+  job_id: string;
+  stage: "pending" | "running" | "retrying" | "completed" | "failed";
+  job_status: "pending" | "running" | "retrying" | "completed" | "failed";
 };
 
 export async function generateMeetingInsights(
@@ -34,6 +36,7 @@ export async function generateMeetingInsights(
     {
       method: "POST",
       headers: {
+        "Idempotency-Key": crypto.randomUUID(),
         Authorization: `Bearer ${session.access_token}`,
       },
     },

@@ -11,6 +11,7 @@ export type MeetingProcessingStage =
   | "pending"
   | "transcribing"
   | "analyzing"
+  | "retrying"
   | "completed"
   | "failed";
 export type MeetingActionItemStatus = "open" | "in_progress" | "completed";
@@ -407,7 +408,42 @@ export type Database = {
       >;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      enqueue_meeting_processing_job: {
+        Args: {
+          p_meeting_id: string;
+          p_job_type: string;
+          p_file_id: string | null;
+          p_idempotency_key: string;
+        };
+        Returns: {
+          job_id: string;
+          job_status: string;
+        }[];
+      };
+      search_my_meetings: {
+        Args: {
+          p_query: string;
+          p_status?: string;
+          p_limit?: number;
+        };
+        Returns: {
+          meeting_id: string;
+          title: string;
+          description: string | null;
+          status: MeetingStatus;
+          meeting_date: string | null;
+          created_at: string;
+          updated_at: string;
+          has_transcript: boolean;
+          has_intelligence: boolean;
+          processing_stage: MeetingProcessingStage | null;
+          last_updated: string;
+          search_context: string | null;
+          matched_in: "title" | "transcript" | "title_and_transcript";
+        }[];
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

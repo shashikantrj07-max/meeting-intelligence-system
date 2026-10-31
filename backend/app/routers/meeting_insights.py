@@ -1,18 +1,21 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from app.schemas.meeting_insights import MeetingInsights
 from app.services.ai.gemini import GeminiMeetingInsightsProvider
 from app.services.meeting_action_items import sync_generated_action_items
+from app.services.processing_jobs import enqueue_meeting_processing_job
 from app.services.supabase import create_request_supabase_client
 
 router = APIRouter(prefix="/api/meetings", tags=["meeting insights"])
 logger = logging.getLogger(__name__)
-PROCESSING_STALE_AFTER = timedelta(minutes=5)
+# Covers three 120-second Gemini attempts, retry backoff, and a safety margin.
+PROCESSING_STALE_AFTER = timedelta(minutes=7)
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -173,8 +176,7 @@ def _generate_and_save_insights(
         insights: MeetingInsights = GeminiMeetingInsightsProvider().generate(
             transcript_text
         )
-    except Exception as exc:
-        logger.error("Gemini insights generation failed (%s).", type(exc).__name__)
+    except Exception:
         _mark_processing_failed(
             supabase,
             meeting_id,
@@ -268,9 +270,10 @@ def _generate_and_save_insights(
 @router.post("/{meeting_id}/insights", status_code=202)
 def generate_meeting_insights(
     meeting_id: UUID,
-    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None),
+    idempotency_key: UUID = Header(alias="Idempotency-Key"),
 ) -> dict[str, str]:
+    request_started = perf_counter()
     access_token = _bearer_token(authorization)
 
     try:
@@ -298,8 +301,10 @@ def generate_meeting_insights(
     authenticated_user_id = str(verified_user.id)
     if not authenticated_user_id:
         raise HTTPException(status_code=401, detail="The access token is invalid.")
+    auth_ms = int((perf_counter() - request_started) * 1000)
 
     meeting_id_value = str(meeting_id)
+    lookup_started = perf_counter()
     try:
         meeting_result = (
             supabase.schema("public")
@@ -321,12 +326,14 @@ def generate_meeting_insights(
             status_code=404,
             detail="Meeting not found or inaccessible.",
         )
+    meeting_lookup_ms = int((perf_counter() - lookup_started) * 1000)
 
+    transcript_started = perf_counter()
     try:
         transcript_result = (
             supabase.schema("public")
             .table("meeting_transcripts")
-            .select("content")
+            .select("meeting_id")
             .eq("meeting_id", meeting_id_value)
             .maybe_single()
             .execute()
@@ -344,41 +351,39 @@ def generate_meeting_insights(
             detail="No transcript found for this meeting.",
         )
 
-    transcript_text = transcript_result.data.get("content")
-    if not isinstance(transcript_text, str) or not transcript_text.strip():
-        raise HTTPException(
-            status_code=500,
-            detail="The meeting transcript could not be processed.",
-        )
+    transcript_lookup_ms = int((perf_counter() - transcript_started) * 1000)
 
-    started_at_datetime = datetime.now(timezone.utc)
-    started_at = started_at_datetime.isoformat()
-    stale_before = (started_at_datetime - PROCESSING_STALE_AFTER).isoformat()
+    enqueue_started = perf_counter()
     try:
-        claimed = _claim_processing(
+        job = enqueue_meeting_processing_job(
             supabase,
-            meeting_id_value,
-            started_at,
-            stale_before,
+            meeting_id=meeting_id_value,
+            job_type="insights",
+            idempotency_key=str(idempotency_key),
         )
     except Exception as exc:
         raise _server_error(
-            "Unable to start meeting intelligence processing.",
-            "Processing state update",
+            "Unable to queue meeting intelligence processing.",
+            "Processing job enqueue",
             exc,
         ) from exc
 
-    if not claimed:
-        raise HTTPException(
-            status_code=409,
-            detail="Meeting intelligence is already being processed.",
-        )
-
-    background_tasks.add_task(
-        _generate_and_save_insights,
-        supabase,
-        meeting_id_value,
-        transcript_text,
-        started_at,
+    enqueue_ms = int((perf_counter() - enqueue_started) * 1000)
+    logger.info(
+        "Meeting intelligence queued: status=%s auth_ms=%d "
+        "meeting_lookup_ms=%d transcript_presence_ms=%d enqueue_ms=%d "
+        "request_total_ms=%d",
+        job["status"],
+        auth_ms,
+        meeting_lookup_ms,
+        transcript_lookup_ms,
+        enqueue_ms,
+        int((perf_counter() - request_started) * 1000),
     )
-    return {"meeting_id": meeting_id_value, "stage": "analyzing"}
+
+    return {
+        "meeting_id": meeting_id_value,
+        "job_id": job["job_id"],
+        "stage": job["status"],
+        "job_status": job["status"],
+    }

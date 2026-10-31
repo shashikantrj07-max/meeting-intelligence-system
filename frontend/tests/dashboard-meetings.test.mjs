@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   buildDashboardMeetings,
+  buildDashboardSearchMeetings,
+  DASHBOARD_MEETING_SEARCH_LIMIT,
   filterDashboardMeetings,
+  getDashboardSearchMode,
   getProcessingFailureLabel,
   parseDashboardFilters,
   toDashboardTitleSearchPattern,
@@ -69,6 +72,38 @@ test("parses URL search and supported meeting status filters", () => {
 test("escapes title-search wildcards as literal text", () => {
   assert.equal(toDashboardTitleSearchPattern(" planning "), "% planning %");
   assert.equal(toDashboardTitleSearchPattern("50%_\\complete"), "%50\\%\\_\\\\complete%");
+});
+
+test("distinguishes empty, too-short, and searchable queries", () => {
+  assert.equal(getDashboardSearchMode("  "), "all");
+  assert.equal(getDashboardSearchMode("ab"), "too_short");
+  assert.equal(getDashboardSearchMode("meeting"), "search");
+});
+
+test("maps title and transcript search results with bounded result count", () => {
+  assert.equal(DASHBOARD_MEETING_SEARCH_LIMIT, 25);
+  assert.deepEqual(buildDashboardSearchMeetings([]), []);
+  const [meeting] = buildDashboardSearchMeetings([
+    {
+      meeting_id: "transcript-match",
+      title: "Quarterly planning",
+      description: null,
+      status: "completed",
+      meeting_date: null,
+      created_at: "2026-10-24T10:00:00Z",
+      updated_at: "2026-10-24T10:00:00Z",
+      has_transcript: true,
+      has_intelligence: true,
+      processing_stage: "completed",
+      last_updated: "2026-10-25T10:00:00Z",
+      search_context: "Discussed [budget] priorities.",
+      matched_in: "transcript",
+    },
+  ]);
+  assert.equal(meeting.id, "transcript-match");
+  assert.equal(meeting.matchedIn, "transcript");
+  assert.equal(meeting.searchContext, "Discussed [budget] priorities.");
+  assert.equal(meeting.hasTranscript, true);
 });
 
 test("filters meetings by case-insensitive title and processing state", () => {

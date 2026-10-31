@@ -1,8 +1,11 @@
 import { connection } from "next/server";
 
 import {
+  buildDashboardSearchMeetings,
   buildDashboardMeetings,
+  DASHBOARD_MEETING_SEARCH_LIMIT,
   filterDashboardMeetings,
+  getDashboardSearchMode,
   toDashboardTitleSearchPattern,
   type DashboardFilters,
 } from "@/lib/dashboard-meetings";
@@ -11,6 +14,31 @@ import { createClient } from "@/lib/supabase/server";
 export async function getDashboardMeetings(filters: DashboardFilters) {
   await connection();
   const supabase = await createClient();
+  const searchMode = getDashboardSearchMode(filters.search);
+
+  if (searchMode === "too_short") {
+    return { data: [], error: null };
+  }
+
+  if (searchMode === "search") {
+    const { data: results, error } = await supabase
+      .schema("public")
+      .rpc("search_my_meetings", {
+        p_query: filters.search,
+        p_status: filters.status,
+        p_limit: DASHBOARD_MEETING_SEARCH_LIMIT,
+      });
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return {
+      data: buildDashboardSearchMeetings(results ?? []),
+      error: null,
+    };
+  }
+
   const { data: meetings, error } = await supabase
     .schema("public")
     .from("meetings")

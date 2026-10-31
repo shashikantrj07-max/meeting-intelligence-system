@@ -1,18 +1,327 @@
 import json
+import re
 import unittest
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+from google import genai
+from google.genai import types
 from pydantic import ValidationError
 
 from app.routers.meeting_insights import (
+    PROCESSING_STALE_AFTER,
     _generate_and_save_insights as generate_manually,
 )
 from app.routers.meeting_transcription import (
     _generate_and_save_insights as generate_automatically,
 )
 from app.schemas.meeting_insights import MeetingInsights
-from app.services.ai.gemini import _build_prompt, _gemini_response_schema
+from app.services.ai.gemini import (
+    GEMINI_REQUEST_TIMEOUT_MS,
+    GEMINI_RETRY_ATTEMPTS,
+    GEMINI_RETRY_HTTP_STATUS_CODES,
+    GEMINI_RETRY_MAX_DELAY_SECONDS,
+    GeminiMeetingInsightsProvider,
+    _build_prompt,
+    _gemini_response_schema,
+)
+
+
+_GENAI_CLIENT = genai.Client
+
+
+class GeminiProviderRetryTests(unittest.TestCase):
+    def _provider_for_responses(
+        self,
+        responses: list[tuple[int, dict[str, object]]],
+    ) -> tuple[GeminiMeetingInsightsProvider, list[int], types.HttpOptions]:
+        request_count = [0]
+        configured_options: list[types.HttpOptions] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            del request
+            response_index = request_count[0]
+            request_count[0] += 1
+            status, payload = responses[min(response_index, len(responses) - 1)]
+            return httpx.Response(status, json=payload)
+
+        def create_client(
+            *,
+            api_key: str,
+            http_options: types.HttpOptions,
+        ) -> genai.Client:
+            configured_options.append(http_options)
+            test_options = http_options.model_copy(
+                update={
+                    "httpx_client": httpx.Client(
+                        transport=httpx.MockTransport(respond)
+                    )
+                }
+            )
+            return _GENAI_CLIENT(api_key=api_key, http_options=test_options)
+
+        with patch(
+            "app.services.ai.gemini.genai.Client",
+            side_effect=create_client,
+        ):
+            provider = GeminiMeetingInsightsProvider(
+                api_key="test-key",
+                model="gemini-test",
+            )
+
+        self.addCleanup(provider.client.close)
+        return provider, request_count, configured_options[0]
+
+    @staticmethod
+    def _success_payload() -> dict[str, object]:
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "summary": "Meeting summary.",
+                                        "key_decisions": [],
+                                        "action_items": [],
+                                        "risks_blockers": [],
+                                        "discussion_points": [],
+                                        "open_questions": [],
+                                        "next_steps": [],
+                                    }
+                                )
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+
+    @staticmethod
+    def _api_error_payload(code: int, status: str) -> dict[str, object]:
+        return {
+            "error": {
+                "code": code,
+                "message": status,
+                "status": status,
+            }
+        }
+
+    def test_successful_request_uses_one_attempt_and_keeps_timeout(self) -> None:
+        provider, request_count, http_options = self._provider_for_responses(
+            [(200, self._success_payload())]
+        )
+
+        with self.assertLogs("app.services.ai.gemini", level="INFO") as logs:
+            result = provider.generate("Transcript.")
+
+        self.assertEqual(result.summary, "Meeting summary.")
+        self.assertEqual(request_count[0], 1)
+        self.assertTrue(
+            any(
+                "attempt 1/3 completed" in message
+                and "final_outcome=success" in message
+                for message in logs.output
+            )
+        )
+        self.assertRegex(
+            "\n".join(logs.output),
+            r"request_id=[0-9a-f]{32}",
+        )
+        self.assertEqual(http_options.timeout, GEMINI_REQUEST_TIMEOUT_MS)
+        retry_options = http_options.retry_options
+        self.assertIsNotNone(retry_options)
+        assert retry_options is not None
+        self.assertEqual(
+            retry_options.attempts,
+            GEMINI_RETRY_ATTEMPTS,
+        )
+        self.assertEqual(
+            retry_options.http_status_codes,
+            list(GEMINI_RETRY_HTTP_STATUS_CODES),
+        )
+        self.assertEqual(retry_options.initial_delay, 1.0)
+        self.assertEqual(
+            retry_options.max_delay,
+            GEMINI_RETRY_MAX_DELAY_SECONDS,
+        )
+        self.assertEqual(retry_options.exp_base, 2.0)
+        self.assertEqual(retry_options.jitter, 1.0)
+
+    def test_transient_504_retries_then_succeeds(self) -> None:
+        provider, request_count, _ = self._provider_for_responses(
+            [
+                (504, self._api_error_payload(504, "DEADLINE_EXCEEDED")),
+                (200, self._success_payload()),
+            ]
+        )
+
+        with self.assertLogs("google_genai._api_client", level="INFO") as logs:
+            with self.assertLogs(
+                "app.services.ai.gemini",
+                level="INFO",
+            ) as provider_logs:
+                result = provider.generate("Transcript.")
+
+        self.assertEqual(result.summary, "Meeting summary.")
+        self.assertEqual(request_count[0], 2)
+        self.assertTrue(
+            any(
+                "attempt 1/3 failed" in message
+                and "status=504" in message
+                and "will_retry=true" in message
+                and "retry_delay_seconds=" in message
+                and "elapsed_total_ms=" in message
+                and " elapsed_ms=" not in message
+                for message in logs.output
+            )
+        )
+        retry_message = next(
+            message for message in logs.output if "will_retry=true" in message
+        )
+        self.assertRegex(
+            retry_message,
+            r"retry_delay_seconds=\d+(?:\.\d+)?",
+        )
+        self.assertFalse(any("DEADLINE_EXCEEDED" in message for message in logs.output))
+        self.assertFalse(any("Deadline expired" in message for message in logs.output))
+        correlated_messages = "\n".join(logs.output + provider_logs.output)
+        request_ids = set(
+            re.findall(r"request_id=([0-9a-f]{32})", correlated_messages)
+        )
+        self.assertEqual(len(request_ids), 1)
+        self.assertIn("attempt 2/3 completed", correlated_messages)
+
+    def test_retry_exhaustion_propagates_provider_error(self) -> None:
+        provider, request_count, _ = self._provider_for_responses(
+            [(504, self._api_error_payload(504, "DEADLINE_EXCEEDED"))]
+        )
+
+        with self.assertLogs("google_genai._api_client", level="INFO") as sdk_logs:
+            with (
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "Gemini API request failed",
+                ) as raised,
+                self.assertLogs("app.services.ai.gemini", level="ERROR") as logs,
+            ):
+                provider.generate("Transcript.")
+
+        self.assertEqual(request_count[0], GEMINI_RETRY_ATTEMPTS)
+        self.assertIn("status=504", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertTrue(
+            any(
+                "attempt 3/3 failed" in message
+                and "status=504" in message
+                and "will_retry=false" in message
+                and "final_outcome=failure" in message
+                and "elapsed_total_ms=" in message
+                and " elapsed_ms=" not in message
+                for message in logs.output
+            )
+        )
+        retry_logs = [
+            message for message in sdk_logs.output if "will_retry=true" in message
+        ]
+        self.assertEqual(len(retry_logs), GEMINI_RETRY_ATTEMPTS - 1)
+        self.assertTrue(
+            all(
+                f"attempt {index}/3 failed" in message and "status=504" in message
+                for index, message in enumerate(retry_logs, start=1)
+            )
+        )
+        self.assertTrue(
+            all(
+                re.search(r"retry_delay_seconds=\d+(?:\.\d+)?", message)
+                for message in retry_logs
+            )
+        )
+        self.assertFalse(any("DEADLINE_EXCEEDED" in message for message in sdk_logs.output))
+        self.assertFalse(any("Deadline expired" in message for message in sdk_logs.output))
+        self.assertFalse(any("DEADLINE_EXCEEDED" in message for message in logs.output))
+        self.assertFalse(any("Deadline expired" in message for message in logs.output))
+        correlated_messages = "\n".join(sdk_logs.output + logs.output)
+        request_ids = set(
+            re.findall(r"request_id=([0-9a-f]{32})", correlated_messages)
+        )
+        self.assertEqual(len(request_ids), 1)
+
+    def test_permanent_client_error_is_not_retried(self) -> None:
+        provider, request_count, http_options = self._provider_for_responses(
+            [(400, self._api_error_payload(400, "INVALID_ARGUMENT"))]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Gemini API request failed"):
+            provider.generate("Transcript.")
+
+        self.assertEqual(request_count[0], 1)
+        retry_options = http_options.retry_options
+        self.assertIsNotNone(retry_options)
+        assert retry_options is not None
+        self.assertNotIn(400, retry_options.http_status_codes)
+
+    def test_client_initialization_logs_runtime_and_effective_options(self) -> None:
+        with self.assertLogs("app.services.ai.gemini", level="INFO") as logs:
+            provider, _, http_options = self._provider_for_responses(
+                [(200, self._success_payload())]
+            )
+
+        self.assertIsNotNone(provider.client)
+        messages = "\n".join(logs.output)
+        self.assertIn("sdk_version=", messages)
+        self.assertIn("python=", messages)
+        self.assertIn(f"'timeout': {GEMINI_REQUEST_TIMEOUT_MS}", messages)
+        self.assertIn(f"'attempts': {GEMINI_RETRY_ATTEMPTS}", messages)
+        self.assertIn(
+            f"'http_status_codes': {list(GEMINI_RETRY_HTTP_STATUS_CODES)}",
+            messages,
+        )
+        retry_options = http_options.retry_options
+        self.assertIsNotNone(retry_options)
+        assert retry_options is not None
+        self.assertEqual(
+            retry_options.http_status_codes,
+            list(GEMINI_RETRY_HTTP_STATUS_CODES),
+        )
+
+    def test_exhausted_retries_mark_processing_attempt_failed(self) -> None:
+        provider, request_count, _ = self._provider_for_responses(
+            [(504, self._api_error_payload(504, "DEADLINE_EXCEEDED"))]
+        )
+        supabase = _FakeSupabase()
+
+        with patch(
+            "app.routers.meeting_insights.GeminiMeetingInsightsProvider",
+            return_value=provider,
+        ):
+            generate_manually(
+                supabase,
+                "meeting-id",
+                "Transcript.",
+                "2026-10-25T00:00:00Z",
+            )
+
+        failed_attempt_updates = [
+            values
+            for table, values in supabase.updates
+            if table == "meeting_processing" and values.get("stage") == "failed"
+        ]
+        self.assertEqual(request_count[0], GEMINI_RETRY_ATTEMPTS)
+        self.assertEqual(len(failed_attempt_updates), 1)
+        self.assertEqual(supabase.upserts, [])
+        worst_case_request_time = timedelta(
+            seconds=(
+                GEMINI_RETRY_ATTEMPTS * (GEMINI_REQUEST_TIMEOUT_MS / 1000)
+                + (GEMINI_RETRY_ATTEMPTS - 1) * GEMINI_RETRY_MAX_DELAY_SECONDS
+            )
+        )
+        self.assertGreater(PROCESSING_STALE_AFTER, worst_case_request_time)
 
 
 class GeminiResponseSchemaTests(unittest.TestCase):
@@ -192,8 +501,9 @@ class _FakeSupabaseQuery:
         self.supabase.upserts.append((self.table_name, payload, on_conflict))
         return self
 
-    def update(self, _values: dict[str, object]) -> "_FakeSupabaseQuery":
+    def update(self, values: dict[str, object]) -> "_FakeSupabaseQuery":
         self.operation = "update"
+        self.supabase.updates.append((self.table_name, values))
         return self
 
     def execute(self) -> SimpleNamespace:
@@ -213,6 +523,7 @@ class _FakeSupabase:
                 str,
             ]
         ] = []
+        self.updates: list[tuple[str, dict[str, object]]] = []
 
     def schema(self, _schema: str) -> "_FakeSupabase":
         return self

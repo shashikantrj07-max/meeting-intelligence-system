@@ -15,3 +15,14 @@ def create_request_supabase_client(access_token: str) -> Client:
     )
 
     return client
+
+
+def create_worker_supabase_client() -> Client:
+    """Create the server-only Supabase client used by the durable worker."""
+    service_role_key = settings.SUPABASE_SERVICE_ROLE_KEY
+    if not service_role_key or not service_role_key.strip():
+        raise RuntimeError(
+            "SUPABASE_SERVICE_ROLE_KEY is required to run the processing worker."
+        )
+
+    return create_client(settings.SUPABASE_URL, service_role_key)

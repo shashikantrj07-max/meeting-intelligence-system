@@ -4,14 +4,14 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { GenerateInsightsButton } from "@/components/meetings/generate-insights-button";
+import { createClient } from "@/lib/supabase/client";
 import type { MeetingProcessingStage } from "@/types/database";
 
-const PROCESSING_STALE_AFTER_MS = 5 * 60 * 1000;
+const STATUS_POLL_INTERVAL_MS = 2000;
 
 type MeetingProcessingControlsProps = {
   meetingId: string;
   stage: MeetingProcessingStage | null;
-  startedAt: string | null;
   hasExistingInsights: boolean;
   hasTranscript: boolean;
 };
@@ -19,63 +19,74 @@ type MeetingProcessingControlsProps = {
 export function MeetingProcessingControls({
   meetingId,
   stage,
-  startedAt,
   hasExistingInsights,
   hasTranscript,
 }: MeetingProcessingControlsProps) {
   const router = useRouter();
-  const [staleStartedAt, setStaleStartedAt] = useState<string | null>(null);
-  const isStale =
-    stage === "analyzing" &&
-    startedAt !== null &&
-    staleStartedAt === startedAt;
+  const [observedStage, setObservedStage] = useState<MeetingProcessingStage | null>(null);
+  const [queuedLocally, setQueuedLocally] = useState(false);
+  const displayStage = observedStage ?? (queuedLocally ? "pending" : stage);
   const isActive =
-    stage === "pending" || stage === "transcribing" || stage === "analyzing";
+    displayStage === "pending" ||
+    displayStage === "transcribing" ||
+    displayStage === "analyzing" ||
+    displayStage === "retrying";
 
   useEffect(() => {
-    if (stage !== "analyzing" || !startedAt) {
+    if (!isActive) {
       return;
     }
 
-    const startedAtTime = Date.parse(startedAt);
-    if (!Number.isFinite(startedAtTime)) {
-      return;
+    let cancelled = false;
+    let timeoutId: number | undefined;
+
+    async function pollStatus() {
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .schema("public")
+          .from("meeting_processing")
+          .select("stage")
+          .eq("meeting_id", meetingId)
+          .maybeSingle();
+
+        if (cancelled) return;
+        if (!error && data?.stage) {
+          const nextStage = data.stage as MeetingProcessingStage;
+          setObservedStage(nextStage);
+          if (nextStage === "completed" || nextStage === "failed") {
+            setQueuedLocally(false);
+            router.refresh();
+            return;
+          }
+        }
+      } catch {
+        // Keep the last known stage and retry on the next polling interval.
+      }
+      if (!cancelled) {
+        timeoutId = window.setTimeout(pollStatus, STATUS_POLL_INTERVAL_MS);
+      }
     }
 
-    const timeUntilStale =
-      startedAtTime + PROCESSING_STALE_AFTER_MS - Date.now();
-    const timeoutId = window.setTimeout(
-      () => setStaleStartedAt(startedAt),
-      Math.max(timeUntilStale, 0),
-    );
-    return () => window.clearTimeout(timeoutId);
-  }, [stage, startedAt]);
+    timeoutId = window.setTimeout(pollStatus, STATUS_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [isActive, meetingId, router]);
 
-  useEffect(() => {
-    if (!isActive || isStale) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      router.refresh();
-    }, 2000);
-    return () => window.clearInterval(intervalId);
-  }, [isActive, isStale, router]);
-
-  const canRetry = isStale || stage === "failed";
-  const statusMessage = isStale
-    ? hasExistingInsights
-      ? "A newer intelligence generation attempt appears stalled. Your previous intelligence is still available."
-      : "This processing attempt appears stalled. You can retry intelligence generation."
-    : stage === "pending"
+  const canRetry = displayStage === "failed";
+  const statusMessage = displayStage === "pending"
       ? "Meeting processing is queued."
-      : stage === "transcribing"
+          : displayStage === "transcribing"
         ? "The meeting transcript is being processed."
-        : stage === "analyzing"
+          : displayStage === "analyzing"
           ? "Meeting intelligence is being generated."
-          : stage === "completed"
+          : displayStage === "retrying"
+            ? "A temporary issue occurred. Processing will retry automatically."
+          : displayStage === "completed"
             ? "Meeting processing is complete."
-            : stage === "failed"
+          : displayStage === "failed"
               ? "Meeting intelligence generation failed. You can try again."
               : null;
 
@@ -85,12 +96,16 @@ export function MeetingProcessingControls({
         meetingId={meetingId}
         hasExistingInsights={hasExistingInsights}
         canRetry={canRetry}
-        disabled={!hasTranscript || (isActive && !isStale)}
+        disabled={!hasTranscript || isActive}
+        onQueued={() => {
+          setObservedStage("pending");
+          setQueuedLocally(true);
+        }}
       />
       {statusMessage ? (
         <p
           className={`max-w-xs text-right text-sm ${
-            stage === "failed" || isStale ? "text-amber-800" : "text-zinc-600"
+            displayStage === "failed" ? "text-amber-800" : "text-zinc-600"
           }`}
           role="status"
         >

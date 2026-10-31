@@ -51,7 +51,24 @@ export type DashboardMeeting = MeetingRow & {
   hasIntelligence: boolean;
   processingStage: MeetingProcessingStage | null;
   lastUpdated: string;
+  searchContext: string | null;
+  matchedIn: "title" | "transcript" | "title_and_transcript" | null;
 };
+
+export const DASHBOARD_MEETING_SEARCH_LIMIT = 25;
+
+export type DashboardMeetingSearchRow =
+  Database["public"]["Functions"]["search_my_meetings"]["Returns"][number];
+
+export function getDashboardSearchMode(
+  search: string,
+): "all" | "search" | "too_short" {
+  const normalizedSearch = search.trim();
+  if (!normalizedSearch) {
+    return "all";
+  }
+  return normalizedSearch.length < 3 ? "too_short" : "search";
+}
 
 export function toDashboardTitleSearchPattern(search: string): string {
   const escapedSearch = search.replace(/[\\%_]/g, "\\$&");
@@ -100,8 +117,30 @@ export function buildDashboardMeetings(
         intelligence?.updated_at,
         processingState?.updated_at,
       ),
+      searchContext: null,
+      matchedIn: null,
     };
   });
+}
+
+export function buildDashboardSearchMeetings(
+  results: DashboardMeetingSearchRow[],
+): DashboardMeeting[] {
+  return results.map((result) => ({
+    id: result.meeting_id,
+    title: result.title,
+    description: result.description,
+    status: result.status,
+    meeting_date: result.meeting_date,
+    created_at: result.created_at,
+    updated_at: result.updated_at,
+    hasTranscript: result.has_transcript,
+    hasIntelligence: result.has_intelligence,
+    processingStage: result.processing_stage,
+    lastUpdated: result.last_updated,
+    searchContext: result.search_context,
+    matchedIn: result.matched_in,
+  }));
 }
 
 function firstRelation<T>(value: T | T[] | null): T | null {
@@ -174,7 +213,10 @@ export function isActiveProcessingStage(
   stage: MeetingProcessingStage | null,
 ): boolean {
   return (
-    stage === "pending" || stage === "transcribing" || stage === "analyzing"
+    stage === "pending" ||
+    stage === "transcribing" ||
+    stage === "analyzing" ||
+    stage === "retrying"
   );
 }
 
@@ -186,6 +228,8 @@ export function formatProcessingStage(stage: MeetingProcessingStage): string {
       return "Transcribing";
     case "analyzing":
       return "Analyzing intelligence";
+    case "retrying":
+      return "Retry scheduled";
     case "completed":
       return "Completed";
     case "failed":

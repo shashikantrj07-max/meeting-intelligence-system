@@ -46,10 +46,16 @@ planned integrations.
    Frontend route protection alone must not be treated as authorization for
    backend resources.
 
-Required browser configuration is `NEXT_PUBLIC_SUPABASE_URL` and
-`NEXT_PUBLIC_SUPABASE_ANON_KEY`, stored locally in `frontend/.env.local`.
-Private keys such as `SUPABASE_SERVICE_ROLE_KEY` must never use a
-`NEXT_PUBLIC_` variable or be included in frontend code.
+The frontend also uses `NEXT_PUBLIC_API_BASE_URL` for FastAPI requests. These
+browser settings are stored locally in `frontend/.env.local`. The backend
+requires `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `GEMINI_API_KEY`; its
+`GEMINI_MODEL` setting is optional and defaults to `gemini-3.8-flash`. Backend
+settings are read from its local environment or `backend/.env`. API requests
+use the Supabase anon key with the caller's bearer token. The separately
+supervised backend processing worker requires the server-only
+`SUPABASE_SERVICE_ROLE_KEY` to claim jobs and access private media. Never put
+private keys such as a Gemini key or the Supabase service-role key in a
+`NEXT_PUBLIC_` variable or frontend code.
 
 ## Phase 2 database foundation
 
@@ -87,6 +93,19 @@ meeting is visible under RLS. Transcript creation, editing, and deletion use
 the normal Supabase browser client under the current authenticated session.
 Transcript-based insights, media transcription, and background processing
 were added in later phases.
+
+## Phase 10 meeting-content search
+
+The dashboard uses the authenticated `search_my_meetings` RPC when a search
+query is provided. A generated English `tsvector` on each transcript is
+indexed with GIN; meeting titles use the `pg_trgm` GIN operator class to retain
+literal substring matching. The invoker-security function filters meetings by
+`auth.uid()`, in addition to the existing meeting and transcript RLS policies,
+and returns at most 50 rows (the dashboard requests 25). Transcript results
+include a short `ts_headline` context excerpt; full transcript text is never
+loaded into the dashboard search response. The migration and behavioral
+verification script must be applied/run only in the confirmed development
+database; adding them to the repository does not verify a live schema.
 
 ## Phase 9F action-item history
 
@@ -151,9 +170,48 @@ returns the item to needs review. Migration:
 ## AI and processing boundaries
 
 The backend generates meeting insights from transcripts through its current
-Gemini-backed provider implementation. Audio/video transcription and processing
-status are implemented. Additional interchangeable AI providers, local
-inference, speaker diarization, and RAG with pgvector remain planned.
+Gemini-backed provider implementation. `GEMINI_API_KEY` is required for that
+external service; the selected model can be configured through
+`GEMINI_MODEL`. Audio/video transcription is a separate, local backend
+workflow using Whisper. The backend invokes FFmpeg to extract mono 16 kHz audio
+from supported uploads, so FFmpeg must be installed and available on the
+backend host. Whisper may download its model on first use and needs local disk
+space and compute; CPU transcription can be slow.
+
+Insight generation and transcription are persisted in
+`public.meeting_processing_jobs` before the API returns HTTP 202. The
+authenticated enqueue function verifies meeting ownership and deduplicates
+requests by owner-scoped idempotency key; a partial unique index also prevents
+multiple active jobs for one meeting. A separate worker started with
+`python -m app.worker` claims jobs atomically using `FOR UPDATE SKIP LOCKED`.
+It processes one job at a time per process, renews a 120-second lease every
+30 seconds, and can reclaim jobs whose lease expires after a worker crash.
+Lease tokens fence transcript and final insight/action-item persistence so a
+stale worker cannot overwrite a newer attempt. Final insights and tracked
+action items are saved in the same transaction that marks the job complete.
+
+Jobs allow at most three attempts. Retryable failures use exponential delay
+starting at 30 seconds, capped at 15 minutes, with up to 20% positive jitter;
+Gemini's own retry policy may make up to three HTTP attempts within each job
+attempt. The backend-only `SUPABASE_SERVICE_ROLE_KEY` is required by the worker
+and must not be exposed to the frontend. Operators must supervise the worker
+process as well as the API. Migration
+`20261030000100_phase11_durable_processing_jobs.sql` creates the durable job
+table and worker RPCs. Follow-up migration
+`20261031000100_phase11_claim_job_meeting_id_ambiguity.sql` replaces the claim
+RPC with an unambiguous `ON CONFLICT ON CONSTRAINT` target; the original
+`ON CONFLICT (meeting_id)` conflicted with the function's `meeting_id` output
+column. Both migrations are reported as applied in the local demo project.
+
+**Reported local demo verification:** the worker successfully claimed and
+processed a job; generated insights and action items appeared on the dashboard
+and remained visible after refresh. This confirms the reported end-to-end demo
+path. It does not establish production readiness or separately verify live
+crash-recovery and concurrency scenarios. The rollback-only behavioral
+verification script is documented in `database/README.md` and should be run
+only against a disposable development/test database. Additional interchangeable
+insight providers, local language-model inference, speaker diarization, and RAG
+with pgvector remain planned; local Whisper transcription is implemented.
 
 ## Request and data flow
 

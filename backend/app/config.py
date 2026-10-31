@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.8-flash"
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
+    FRONTEND_ORIGIN: str | None = None
 
 
 settings = Settings()

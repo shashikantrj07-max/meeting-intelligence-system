@@ -38,6 +38,7 @@ export function MeetingFileTranscribeButton({
         {
           method: "POST",
           headers: {
+            "Idempotency-Key": crypto.randomUUID(),
             Authorization: `Bearer ${session.access_token}`,
           },
         },

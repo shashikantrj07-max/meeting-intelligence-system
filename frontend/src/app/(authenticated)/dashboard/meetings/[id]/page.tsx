@@ -60,29 +60,24 @@ async function MeetingDetailContent({
     );
   }
 
-  const { data: transcript, error: transcriptError } =
-    await getTranscriptByMeetingId(meeting.id);
+  const [
+    { data: transcript, error: transcriptError },
+    { data: insights, error: insightsError },
+    { data: processing, error: processingError },
+    { data: meetingFiles, error: meetingFilesError },
+  ] = await Promise.all([
+    getTranscriptByMeetingId(meeting.id),
+    getMeetingInsightsByMeetingId(meeting.id),
+    getMeetingProcessingByMeetingId(meeting.id),
+    getMeetingFilesByMeetingId(meeting.id),
+  ]);
 
-  if (transcriptError && process.env.NODE_ENV === "development") {
-    console.error("Unable to load meeting transcript:", transcriptError);
+  if (process.env.NODE_ENV === "development") {
+    if (transcriptError) console.error("Unable to load meeting transcript:", transcriptError);
+    if (insightsError) console.error("Unable to load meeting intelligence:", insightsError);
+    if (processingError) console.error("Unable to load meeting processing status:", processingError);
+    if (meetingFilesError) console.error("Unable to load meeting files:", meetingFilesError);
   }
-
-  const { data: insights, error: insightsError } =
-    await getMeetingInsightsByMeetingId(meeting.id);
-
-  if (insightsError && process.env.NODE_ENV === "development") {
-    console.error("Unable to load meeting intelligence:", insightsError);
-  }
-
-  const { data: processing, error: processingError } =
-    await getMeetingProcessingByMeetingId(meeting.id);
-
-  if (processingError && process.env.NODE_ENV === "development") {
-    console.error("Unable to load meeting processing status:", processingError);
-  }
-
-  const { data: meetingFiles, error: meetingFilesError } =
-    await getMeetingFilesByMeetingId(meeting.id);
 
   if (meetingFilesError && process.env.NODE_ENV === "development") {
     console.error("Unable to load meeting files:", meetingFilesError);
@@ -220,7 +215,6 @@ async function MeetingDetailContent({
           <MeetingProcessingControls
             meetingId={meeting.id}
             stage={processing?.stage ?? null}
-            startedAt={processing?.started_at ?? null}
             hasExistingInsights={Boolean(insights)}
             hasTranscript={Boolean(transcript)}
           />

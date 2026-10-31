@@ -18,7 +18,8 @@ export function MeetingProcessingStatusRefresh({
     if (
       stage !== "pending" &&
       stage !== "transcribing" &&
-      stage !== "analyzing"
+      stage !== "analyzing" &&
+      stage !== "retrying"
     ) {
       return;
     }

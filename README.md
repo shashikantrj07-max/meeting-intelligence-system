@@ -21,6 +21,8 @@ Phase 9 action-item accountability and review workflow.
 - **Signal review and analytics:** acknowledge action-item signals, see review
   coverage and related counts, and filter/paginate the action-item drilldown by
   accountability and review state.
+- **Meeting-content search:** search meeting titles and indexed transcript
+  content from the dashboard, with bounded results and short context snippets.
 - **Database ownership controls:** migrations define row-level security for
   meeting-owned data and restricted access to action-item history and review
   state. The API routes that handle action-item, transcription, and insight
@@ -33,8 +35,6 @@ verification scripts as described in [database/README.md](database/README.md).
 
 ## Planned functionality
 
-- Search across transcript and meeting content (the dashboard currently
-  supports meeting-title search).
 - Retrieval-augmented chat, vector search, and pgvector.
 - Export and reporting workflows.
 - Additional interchangeable AI providers and local inference.
@@ -85,42 +85,65 @@ meeting-intelligence-system/
 
 ## Local setup
 
-Requirements: Node.js with npm, and Python 3.12 (or another compatible Python
-version). The frontend and backend can be installed and started independently.
+Requirements: Node.js compatible with the installed Next.js version, npm,
+Python 3.12 (or a version compatible with the installed Whisper/PyTorch
+dependencies), FFmpeg on the backend host for media transcription, a Supabase
+project, and a Gemini API key for meeting-insight generation. The frontend and
+backend are installed and started independently. External services and local
+media-processing requirements must be configured and validated for each
+development environment.
 
 ### Environment variables
 
-Create `frontend/.env.local` with only the Supabase project URL and anon key
-from the Supabase project settings. These two `NEXT_PUBLIC_` values are public
-client configuration; Supabase Auth applies its own access controls. Never put
-a service-role key, database credential, or other private secret in frontend
-code or a `NEXT_PUBLIC_` variable. `.env.local` and other `.env` files are
-ignored by Git and must never be committed. The service-role key is not needed
-by this phase.
+Configure the frontend and backend separately. Create `frontend/.env.local`
+with these names:
+
+| Variable | Used by |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Frontend Supabase client. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Frontend Supabase client; public anon key only. |
+| `NEXT_PUBLIC_API_BASE_URL` | Frontend requests to the FastAPI backend. |
+
+Configure the backend through `backend/.env` or its process environment:
+
+| Variable | Required | Used by |
+|---|---|---|
+| `SUPABASE_URL` | Yes | Backend Supabase client. |
+| `SUPABASE_ANON_KEY` | Yes | Backend Supabase client, used with the caller's bearer token. |
+| `GEMINI_API_KEY` | Yes | Gemini meeting-insight generation. |
+| `GEMINI_MODEL` | No | Gemini model selection; defaults to `gemini-3.8-flash`. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Worker only | Server-side durable job claiming and private media access. |
+
+The Supabase anon key and project URL are public client configuration. Never
+put a service-role key, database credential, Gemini key, or other private
+secret in frontend code or any `NEXT_PUBLIC_` variable. Do not commit any
+`.env` file. Backend configuration details are in
+[backend/README.md](backend/README.md).
 
 ```powershell
 @'
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_API_BASE_URL=
 '@ | Set-Content -Encoding ascii frontend\.env.local
 ```
 
-Fill in the two values in `frontend/.env.local`. In Supabase Auth settings,
-configure the local site URL as `http://localhost:3000` and allow
-`http://localhost:3000/auth/callback` as a redirect URL. `.env.example`
-documents the broader project configuration but should not be copied wholesale
-into the frontend environment.
+Fill these settings locally from the appropriate project configuration. In
+Supabase Auth settings, configure the local site URL and allow the local
+frontend's `/auth/callback` URL as a redirect. Do not copy `.env.example`
+wholesale into either application environment.
 
 ### Frontend setup
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. See [frontend/README.md](frontend/README.md) for
-frontend-specific commands.
+Open `http://localhost:3000`. The FastAPI backend must be started separately
+for API-backed features. See [frontend/README.md](frontend/README.md) for
+frontend-specific commands and tests.
 
 ### Backend setup
 
@@ -133,7 +156,8 @@ py -3.12 -m venv backend\.venv
 python -m pip install -r backend\requirements.txt
 ```
 
-Run the API:
+Set the backend variables listed above in `backend/.env` or the process
+environment, then run the API:
 
 ```powershell
 cd backend
@@ -142,6 +166,12 @@ python -m uvicorn app.main:app --reload
 
 The health check is available at `http://127.0.0.1:8000/health` and returns
 `{"status":"ok"}`. See [backend/README.md](backend/README.md) for details.
+Insight generation and transcription are durably enqueued in Supabase; start a
+separate supervised worker from the `backend` directory with
+`python -m app.worker`. The worker requires the server-only
+`SUPABASE_SERVICE_ROLE_KEY`. Whisper transcription runs on the worker host,
+invokes FFmpeg, and may download a model on first use; CPU processing can be
+slow.
 
 ### Database setup
 
@@ -181,6 +211,22 @@ signals, an acknowledgement workflow, review analytics, and review-state
 filtering in the paginated drilldown. These SQL changes must be applied and
 verified separately for each database.
 
+**Phase 10 — indexed meeting-content search:** Authenticated users can search
+meeting titles and transcript content through an indexed, owner-scoped database
+RPC. Its migration must be applied separately.
+
+**Phase 11 — durable background processing:** Transcription and insight
+requests are persisted as retryable jobs with atomic claims, expiring leases,
+and fenced result persistence. Migrations
+`20261030000100_phase11_durable_processing_jobs.sql` and
+`20261031000100_phase11_claim_job_meeting_id_ambiguity.sql` implement the
+workflow and correct the claim RPC's ambiguous `meeting_id` conflict target.
+In the local demo, the worker claimed and processed a job, and generated
+insights and action items appeared on the dashboard and remained visible after
+refresh, according to the reported live verification. The worker runs as a
+separate process and must be supervised. This local demo result does not imply
+production readiness or independently verify crash-recovery behavior.
+
 ### Authentication routes
 
 - `/login` — email/password login
@@ -193,7 +239,7 @@ establishes the session and returns them to the dashboard.
 
 ## Future development
 
-Remaining work includes search across meeting content, RAG and pgvector,
-additional AI providers and local inference, diarization, exports, deployment,
-and production hardening. These items are planned and are not implied to be
-implemented by the completed phases above.
+Remaining work includes RAG and pgvector, additional AI providers and local
+inference, diarization, exports, deployment, and production hardening. These
+items are planned and are not implied to be implemented by the completed
+phases above.

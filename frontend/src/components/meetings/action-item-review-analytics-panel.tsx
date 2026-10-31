@@ -64,9 +64,14 @@ export function ActionItemReviewAnalyticsPanel({
       className="mt-4 rounded-lg border border-zinc-200 bg-white p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-zinc-900">
-          Review analytics
-        </h3>
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-900">
+            Review analytics
+          </h3>
+          <p className="mt-1 text-xs text-zinc-600">
+            Counts across all your meetings.
+          </p>
+        </div>
         {analytics ? (
           <button
             className="text-xs font-medium text-blue-700 underline-offset-2 hover:underline disabled:opacity-50"
