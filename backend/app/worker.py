@@ -18,7 +18,10 @@ from app.services.processing_jobs import (
     claim_next_processing_job,
     finish_processing_job_failure,
 )
-from app.services.supabase import create_worker_supabase_client
+from app.services.supabase import (
+    WorkerSupabaseClientInitializationError,
+    create_worker_supabase_client,
+)
 
 logger = logging.getLogger("app.processing_worker")
 
@@ -458,9 +461,17 @@ class WorkerSupervisor:
             try:
                 self._runner(self._stop_event)
             except Exception as exc:
+                if isinstance(exc, WorkerSupabaseClientInitializationError):
+                    failure_category = exc.category
+                    cause_type = exc.cause_type or type(exc).__name__
+                else:
+                    failure_category = "worker_initialization_failure"
+                    cause_type = type(exc).__name__
                 logger.error(
-                    "Durable worker exited unexpectedly: error_type=%s",
-                    type(exc).__name__,
+                    "Durable worker exited unexpectedly: "
+                    "failure_category=%s cause_type=%s",
+                    failure_category,
+                    cause_type,
                 )
 
             if self._stop_event.is_set():

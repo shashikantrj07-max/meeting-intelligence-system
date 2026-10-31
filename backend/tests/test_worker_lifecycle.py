@@ -1,15 +1,50 @@
 from __future__ import annotations
 
+import logging
 import threading
 
 from fastapi.testclient import TestClient
 
 from app import worker
 from app.main import create_app
+from app.services import supabase as supabase_service
 
 
 def _wait_for_shutdown(stop_event: threading.Event) -> None:
     stop_event.wait()
+
+
+class _EventLogHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.logged = threading.Event()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+        self.logged.set()
+
+
+def _capture_worker_startup_log() -> list[str]:
+    handler = _EventLogHandler()
+    previous_level = worker.logger.level
+    worker.logger.setLevel(logging.ERROR)
+    worker.logger.addHandler(handler)
+    supervisor = worker.WorkerSupervisor(
+        worker.run_worker,
+        initial_restart_delay=30,
+        max_restart_delay=30,
+        shutdown_timeout=1,
+    )
+    try:
+        assert supervisor.start()
+        assert handler.logged.wait(timeout=1)
+        assert supervisor.stop()
+        return handler.messages
+    finally:
+        supervisor.stop()
+        worker.logger.removeHandler(handler)
+        worker.logger.setLevel(previous_level)
 
 
 def test_lifespan_starts_and_stops_worker_and_health_stays_responsive() -> None:
@@ -157,3 +192,117 @@ def test_stop_before_worker_loop_prevents_new_job_claim(monkeypatch) -> None:
     worker.run_worker(stop_event)
 
     assert claim_count == 0
+
+
+def test_missing_service_role_is_reported_as_safe_initialization_category(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        supabase_service.settings,
+        "SUPABASE_URL",
+        "https://example.supabase.co",
+    )
+    monkeypatch.setattr(
+        supabase_service.settings,
+        "SUPABASE_SERVICE_ROLE_KEY",
+        " ",
+    )
+
+    def unexpected_create_client(*_args, **_kwargs):
+        raise AssertionError("client construction must not run")
+
+    monkeypatch.setattr(
+        supabase_service,
+        "create_client",
+        unexpected_create_client,
+    )
+
+    messages = _capture_worker_startup_log()
+
+    assert any(
+        "failure_category=missing_service_role_configuration" in message
+        for message in messages
+    )
+
+
+def test_missing_supabase_url_is_reported_as_safe_initialization_category(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(supabase_service.settings, "SUPABASE_URL", " ")
+    monkeypatch.setattr(
+        supabase_service.settings,
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "test-service-role-secret",
+    )
+
+    def unexpected_create_client(*_args, **_kwargs):
+        raise AssertionError("client construction must not run")
+
+    monkeypatch.setattr(
+        supabase_service,
+        "create_client",
+        unexpected_create_client,
+    )
+
+    messages = _capture_worker_startup_log()
+
+    assert any(
+        "failure_category=missing_supabase_url" in message
+        for message in messages
+    )
+    assert "test-service-role-secret" not in "\n".join(messages)
+
+
+def test_client_construction_failure_logs_category_without_exception_message(
+    monkeypatch,
+) -> None:
+    test_secret = "test-client-secret-must-not-appear"
+    monkeypatch.setattr(
+        supabase_service.settings,
+        "SUPABASE_URL",
+        "https://example.supabase.co",
+    )
+    monkeypatch.setattr(
+        supabase_service.settings,
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "test-service-role-secret",
+    )
+
+    def fail_create_client(*_args, **_kwargs):
+        raise RuntimeError(f"construction failed with {test_secret}")
+
+    monkeypatch.setattr(
+        supabase_service,
+        "create_client",
+        fail_create_client,
+    )
+
+    messages = _capture_worker_startup_log()
+    output = "\n".join(messages)
+
+    assert "failure_category=supabase_client_construction_failure" in output
+    assert "cause_type=RuntimeError" in output
+    assert test_secret not in output
+    assert "test-service-role-secret" not in output
+
+
+def test_other_worker_initialization_failure_logs_category_without_message(
+    monkeypatch,
+) -> None:
+    test_secret = "test-worker-secret-must-not-appear"
+
+    def fail_initialization():
+        raise RuntimeError(f"startup failed with {test_secret}")
+
+    monkeypatch.setattr(
+        worker,
+        "create_worker_supabase_client",
+        fail_initialization,
+    )
+
+    messages = _capture_worker_startup_log()
+    output = "\n".join(messages)
+
+    assert "failure_category=worker_initialization_failure" in output
+    assert "cause_type=RuntimeError" in output
+    assert test_secret not in output

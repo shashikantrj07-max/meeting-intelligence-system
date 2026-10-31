@@ -8,7 +8,7 @@ provider in `app/services/ai/gemini.py`; uploaded audio/video is processed by
 local Whisper and FFmpeg.
 
 API requests use the Supabase anon key with the caller's bearer token. The
-separate durable-processing worker uses the backend-only
+durable-processing worker, started by the API service, uses the backend-only
 `SUPABASE_SERVICE_ROLE_KEY` to claim jobs and access private media; it must
 never be exposed to the frontend. See
 [`../docs/architecture.md`](../docs/architecture.md) for request and data-flow
