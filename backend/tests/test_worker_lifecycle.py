@@ -66,6 +66,27 @@ def test_lifespan_starts_and_stops_worker_and_health_stays_responsive() -> None:
     assert stopped.wait(timeout=1)
 
 
+def test_lifespan_does_not_wait_for_worker_runner_to_finish(caplog) -> None:
+    runner_started = threading.Event()
+    runner_release = threading.Event()
+
+    def blocked_runner(stop_event: threading.Event) -> None:
+        runner_started.set()
+        while not runner_release.is_set() and not stop_event.wait(timeout=0.01):
+            pass
+
+    app = create_app(worker_runner=blocked_runner)
+    caplog.set_level(logging.INFO)
+    try:
+        with TestClient(app) as client:
+            assert runner_started.wait(timeout=1)
+            assert client.get("/health").status_code == 200
+            assert "FastAPI lifespan startup complete" in caplog.text
+            assert "Durable worker supervisor thread started" in caplog.text
+    finally:
+        runner_release.set()
+
+
 def test_supervisor_restarts_unexpected_exit_with_bounded_backoff_and_one_runner() -> None:
     lock = threading.Lock()
     calls = 0

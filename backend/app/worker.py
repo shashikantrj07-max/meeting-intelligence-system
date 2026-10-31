@@ -427,7 +427,12 @@ class WorkerSupervisor:
                     daemon=True,
                 )
                 _PROCESS_SUPERVISOR = self
+                start_started_at = perf_counter()
                 self._thread.start()
+                logger.info(
+                    "Durable worker supervisor thread started: elapsed_ms=%d",
+                    int((perf_counter() - start_started_at) * 1000),
+                )
                 return True
 
     def stop(self) -> bool:
