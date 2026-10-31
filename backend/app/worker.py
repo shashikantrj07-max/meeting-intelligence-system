@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import threading
-import time
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from app.config import settings
@@ -26,6 +25,11 @@ logger = logging.getLogger("app.processing_worker")
 POLL_INTERVAL_SECONDS = 1
 LEASE_SECONDS = 120
 HEARTBEAT_INTERVAL_SECONDS = 30
+WORKER_RESTART_INITIAL_DELAY_SECONDS = 1
+WORKER_RESTART_MAX_DELAY_SECONDS = 30
+WORKER_SHUTDOWN_TIMEOUT_SECONDS = 25
+_PROCESS_SUPERVISOR_LOCK = threading.Lock()
+_PROCESS_SUPERVISOR: Any | None = None
 CLAIM_RPC_NAME = "claim_next_meeting_processing_job"
 CLAIM_RPC_PATH = f"/rest/v1/rpc/{CLAIM_RPC_NAME}"
 _SENSITIVE_VALUE_PATTERN = re.compile(
@@ -333,12 +337,13 @@ def process_claimed_job(
         )
 
 
-def run_worker() -> None:
+def run_worker(stop_event: threading.Event | None = None) -> None:
+    stop_event = stop_event or threading.Event()
     supabase = create_worker_supabase_client()
     worker_id = str(uuid4())
     logger.info("Durable processing worker started: worker_id=%s", worker_id)
 
-    while True:
+    while not stop_event.is_set():
         try:
             claim_started = perf_counter()
             job = claim_next_processing_job(
@@ -348,7 +353,7 @@ def run_worker() -> None:
                 response_hook=_log_claim_rpc_error_response,
             )
             if job is None:
-                time.sleep(POLL_INTERVAL_SECONDS)
+                stop_event.wait(POLL_INTERVAL_SECONDS)
                 continue
             logger.info(
                 "Processing job claimed: job_id=%s type=%s attempt=%s "
@@ -367,7 +372,111 @@ def run_worker() -> None:
                 "Processing worker iteration failed: error_type=%s",
                 type(exc).__name__,
             )
-            time.sleep(POLL_INTERVAL_SECONDS)
+            stop_event.wait(POLL_INTERVAL_SECONDS)
+
+
+WorkerRunner = Callable[[threading.Event], None]
+
+
+class WorkerSupervisor:
+    """Run one synchronous worker thread and restart unexpected exits safely."""
+
+    def __init__(
+        self,
+        runner: WorkerRunner = run_worker,
+        *,
+        initial_restart_delay: float = WORKER_RESTART_INITIAL_DELAY_SECONDS,
+        max_restart_delay: float = WORKER_RESTART_MAX_DELAY_SECONDS,
+        shutdown_timeout: float = WORKER_SHUTDOWN_TIMEOUT_SECONDS,
+    ) -> None:
+        self._runner = runner
+        self._initial_restart_delay = max(0.0, initial_restart_delay)
+        self._max_restart_delay = max(
+            self._initial_restart_delay, max_restart_delay
+        )
+        self._shutdown_timeout = max(0.0, shutdown_timeout)
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> bool:
+        """Start only if this process has no other active worker supervisor."""
+        global _PROCESS_SUPERVISOR
+        with _PROCESS_SUPERVISOR_LOCK:
+            active = _PROCESS_SUPERVISOR
+            if active is not None and active is not self:
+                active_thread = active._thread
+                if active_thread is not None and active_thread.is_alive():
+                    logger.warning(
+                        "Durable worker already active in this process; "
+                        "ignoring duplicate startup."
+                    )
+                    return False
+                _PROCESS_SUPERVISOR = None
+
+            with self._lock:
+                if self._thread is not None and self._thread.is_alive():
+                    return True
+                self._stop_event = threading.Event()
+                self._thread = threading.Thread(
+                    target=self._supervise,
+                    name="durable-processing-supervisor",
+                    daemon=True,
+                )
+                _PROCESS_SUPERVISOR = self
+                self._thread.start()
+                return True
+
+    def stop(self) -> bool:
+        """Request cooperative shutdown and wait within the deployment budget."""
+        global _PROCESS_SUPERVISOR
+        with self._lock:
+            thread = self._thread
+            stop_event = self._stop_event
+        if thread is None:
+            return True
+
+        stop_event.set()
+        if thread is not threading.current_thread():
+            thread.join(timeout=self._shutdown_timeout)
+        stopped = not thread.is_alive()
+        if not stopped:
+            logger.warning(
+                "Worker shutdown timed out; active job will recover by lease: "
+                "timeout_seconds=%s",
+                self._shutdown_timeout,
+            )
+        else:
+            with _PROCESS_SUPERVISOR_LOCK:
+                if _PROCESS_SUPERVISOR is self:
+                    _PROCESS_SUPERVISOR = None
+        return stopped
+
+    def _supervise(self) -> None:
+        delay = self._initial_restart_delay
+        while not self._stop_event.is_set():
+            try:
+                self._runner(self._stop_event)
+            except Exception as exc:
+                logger.error(
+                    "Durable worker exited unexpectedly: error_type=%s",
+                    type(exc).__name__,
+                )
+
+            if self._stop_event.is_set():
+                return
+
+            logger.warning(
+                "Durable worker stopped unexpectedly; restarting: "
+                "restart_delay_seconds=%s",
+                delay,
+            )
+            if self._stop_event.wait(delay):
+                return
+            delay = min(
+                max(delay * 2, self._initial_restart_delay),
+                self._max_restart_delay,
+            )
 
 
 if __name__ == "__main__":

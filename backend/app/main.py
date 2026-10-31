@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,9 +11,28 @@ from app.routers.meeting_insights import router as meeting_insights_router
 from app.routers.meeting_transcription import (
     router as meeting_transcription_router,
 )
+from app.worker import WorkerRunner, WorkerSupervisor, run_worker
 
-def create_app(frontend_origin: str | None = None) -> FastAPI:
-    app = FastAPI(title="Meeting Intelligence System API")
+
+def create_app(
+    frontend_origin: str | None = None,
+    *,
+    worker_runner: WorkerRunner | None = None,
+) -> FastAPI:
+    runner = worker_runner or run_worker
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        supervisor = WorkerSupervisor(runner)
+        app.state.worker_supervisor = supervisor
+        started = supervisor.start()
+        try:
+            yield
+        finally:
+            if started:
+                supervisor.stop()
+
+    app = FastAPI(title="Meeting Intelligence System API", lifespan=lifespan)
     allowed_origins = (
         [frontend_origin]
         if frontend_origin

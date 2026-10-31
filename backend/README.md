@@ -40,11 +40,11 @@ Create `backend/.env` locally. The backend reads these settings through
 | `GEMINI_MODEL` | No | Selects the Gemini model; defaults to `gemini-3.8-flash`. |
 | `SUPABASE_URL` | Yes | Supabase project URL used by the backend client. |
 | `SUPABASE_ANON_KEY` | Yes | Public/anon Supabase key used with the caller's bearer token. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Worker only | Privileged database and private-storage access for the separately supervised worker. |
-| `FRONTEND_ORIGIN` | No | Exact browser origin allowed by API CORS in addition to the local development origins. Set this for a separately hosted frontend; do not include a path or trailing slash. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Required by combined API/worker service | Privileged database and private-storage access for the durable worker started by the API lifespan. |
+| `FRONTEND_ORIGIN` | No | Exact browser origin allowed by API CORS when configured; if unset, only the two localhost development origins are allowed. Do not include a path or trailing slash. |
 
-Keep the service-role key server-side and configure it only in the backend
-environment that runs the worker. Never expose it to frontend code or a
+Keep the service-role key server-side and configure it only in the Render web
+service or local backend environment. Never expose it to frontend code or a
 `NEXT_PUBLIC_` variable. Never commit `backend/.env` or paste secret values
 into source code, documentation, or logs.
 
@@ -73,19 +73,24 @@ The API listens at `http://127.0.0.1:8000`; its health endpoint is
 ## Durable processing worker
 
 Transcription and insight requests are persisted as jobs before the API returns
-HTTP 202. The worker is a separate process and must be started and supervised
-alongside the API. From the `backend` directory, start it with:
+HTTP 202. FastAPI starts one supervised synchronous worker thread during its
+lifespan and signals it to stop during shutdown. The worker runs outside the
+ASGI event loop, and unexpected exits restart with a bounded delay. From the
+`backend` directory, start the combined service with:
 
-```powershell
-python -m app.worker
+```sh
+uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
 ```
 
-For local development, set `SUPABASE_SERVICE_ROLE_KEY` in the backend
-environment before starting the worker. The worker claims one job at a time
-per process; multiple supervised processes can claim distinct jobs using the
-database's atomic claim function. A 120-second lease is renewed every
-30 seconds. On restart, pending/retryable jobs remain available, and jobs with
-expired leases can be reclaimed. Processing is limited to three job attempts;
+Run exactly one Uvicorn worker process for this combined deployment; do not
+pass `--workers` greater than one or start a separate `python -m app.worker`
+process alongside the API. Configure `SUPABASE_SERVICE_ROLE_KEY` on the
+backend service. The worker continues to claim jobs only through the database's
+atomic claim function. A 120-second lease is renewed every 30 seconds. On
+restart, pending/retryable jobs remain available, and jobs with expired leases
+can be reclaimed. Shutdown waits up to 25 seconds for a current job; if the
+host terminates processing sooner, lease expiry allows recovery. Processing is
+limited to three job attempts;
 retryable failures use exponential delay starting at 30 seconds, capped at
 15 minutes, with up to 20% positive jitter. Gemini also has its own request
 retry policy, so a failed Gemini job may make up to nine provider requests
@@ -123,8 +128,9 @@ availability, or transcription against real media.
 
 ## Processing limitations
 
-Whisper inference and FFmpeg run on the worker host; they consume local compute
-and temporary disk space. Supervise the worker and monitor its logs and queue
-health. The local demo verified a worker claim and processing run. Live
+Whisper inference and FFmpeg run in the worker thread on the API host; they
+consume local compute and temporary disk space and can contend with API work.
+Monitor service logs and queue health. The local demo verified a worker claim
+and processing run. Live
 crash-recovery, concurrency under failure, and other database projects require
 their own verification.

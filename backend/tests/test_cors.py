@@ -1,3 +1,5 @@
+from threading import Event
+
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -7,8 +9,12 @@ PRODUCTION_ORIGIN = "https://meeting-intelligence-system-rho.vercel.app"
 LOCAL_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
 
 
+def _wait_for_shutdown(stop_event: Event) -> None:
+    stop_event.wait()
+
+
 def _preflight(origin: str, *, frontend_origin: str | None):
-    app = create_app(frontend_origin)
+    app = create_app(frontend_origin, worker_runner=_wait_for_shutdown)
     with TestClient(app) as client:
         return client.options(
             "/api/meetings/00000000-0000-0000-0000-000000000001/insights",
